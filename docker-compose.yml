@@ -1,0 +1,14 @@
+services:
+  acqms-db:
+    image: postgres:16
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: acqms
+      POSTGRES_PASSWORD: acqms_dev_pw
+      POSTGRES_DB: acqms
+    volumes:
+      - acqms_pg_data:/var/lib/postgresql/data
+
+volumes:
+  acqms_pg_data:

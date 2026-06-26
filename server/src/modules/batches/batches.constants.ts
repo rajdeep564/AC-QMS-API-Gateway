@@ -1,0 +1,1 @@
+export const SEED_GLYCINE_BATCH_NO = "B-2026-001";

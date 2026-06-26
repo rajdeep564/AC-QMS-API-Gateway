@@ -1,0 +1,206 @@
+# Glycine IP — Ground-Truth Reference (Real Documents)
+
+**Purpose:** Faithful extraction of Aditya Chemicals' real Glycine IP document set, for use as the AC-QMS demo fixture and as the checklist to reconcile against the Product Master (arriving separately).
+
+**Source documents (batch GCN/010226):**
+- SPEC — Finished Product Specification, `SPEC/FG00038/01`, Revision 02
+- MOA — Finished Product Method of Analysis, `MOA/FG00038/01`, Revision 02 (23 pp)
+- AWS — Finished Product Analysis Protocol (filled), `AWS/GCN/01`, 29 pp
+- COA — Analytical Report, batch `GCN/010226`
+
+> **Status:** EXTRACTION ONLY. Reconciliation against the Product Master is pending the Master's arrival. Discrepancies flagged below must be resolved before the seed is finalised.
+>
+> **Operational checklist:** When the Master arrives, run [docs/checklists/glycine-master-reconciliation.md](checklists/glycine-master-reconciliation.md).
+
+---
+
+## 1. Product Header (identity fields)
+
+| Field | Value |
+|---|---|
+| Product Name | Glycine |
+| Material name | Glycine IP |
+| Technical / chemical name | 2-aminoethanoic acid |
+| Chemical formula | C₂H₅NO₂ |
+| Molecular weight | 75.1 g/mole |
+| Composition | 100 % |
+| Origin / Source | Synthetic |
+| Method of production | Chemical synthesis |
+| Reference (pharmacopoeia) | IP |
+| Shelf life (raw materials) | 5 years |
+| Storage conditions | Preserve in well-closed container at room temperature |
+| Special handling | N/A |
+| Sampling plan | 100 % |
+| Retained sample quantity | 30 gm |
+| Retained sample retention | Expiry + 1 year |
+
+**Document numbering observed (real):**
+- SPEC: `SPEC/FG00038/01`  (uses product code **FG00038**)
+- MOA:  `MOA/FG00038/01`   (same FG code)
+- AWS:  `AWS/GCN/01`        (uses batch-family code **GCN**)
+- ARN:  `2026 GCN 09`        (financial-year + GCN + sequence)
+- Batch No: `GCN/010226`
+
+> **Reconcile:** our generated formats are `SPEC/<code>/<batchNo>` etc. The real world uses an **FG#### product code for the standing SPEC/MOA** and a **GCN batch-family code for the per-batch AWS/ARN/COA**. Decide whether to mirror this dual-code convention.
+
+---
+
+## 2. Full Test List (the real ~18 test groups)
+
+This REPLACES the 4-test placeholder seed (Description, Identification, pH, Assay).
+
+### Typical specification tests
+
+| # | Test | Type | Acceptance Criteria | Dept |
+|---|---|---|---|---|
+| 1 | Description | Qualitative | A white, crystalline powder | QC |
+| 2 | Solubility | Qualitative | Freely soluble in water; very slightly soluble in ethanol (95%); practically insoluble in ether | QC |
+| 3A | Identification — By IR | Qualitative | IR spectrum concordant with Glycine working standard | QC |
+| 3B | Identification — By chemical test | Qualitative | Resulting solution violet w/ greenish-yellow fluorescence; becomes orange then yellow; intense fluorescence remains | QC |
+| 4 | Appearance of solution | Qualitative | 10.0% w/v solution in CO₂-free water clear & not more intensely coloured than reference YS7 | QC |
+| 5 | pH | Quantitative (BETWEEN) | 5.9 to 6.3 | QC |
+| 6 | Chlorides | Quantitative (NMT) | NMT 100 ppm | QC |
+| 7 | Heavy metals | Quantitative (NMT) | NMT 10 ppm | QC |
+| 8 | Sulphated ash | Quantitative (NMT) | NMT 0.1 % | QC |
+| 9 | Loss on drying | Quantitative (NMT) | NMT 0.5 % | QC |
+| 10 | Assay (on dried basis) | Quantitative (BETWEEN) | 98.5 % to 101.5 % | QC |
+| 15 | Foreign matter | Qualitative | Should be absent in 5 gm sample | QC |
+| 16 | OVI / Residual solvent (Methanol) | Quantitative (NMT) | Methanol: NMT 3000 ppm (per ICH Q3C(R8)) — outside lab | Outside |
+| 17 | Ethylene oxide | Quantitative (NMT) | NMT 0.1 ppm — outside lab | Outside |
+
+### Additional tests (customer-request only — NOT part of typical spec → `is_optional = true`)
+
+| # | Test | Acceptance Criteria |
+|---|---|---|
+| 11 | Sieve analysis | As per customer requirement |
+| 12 | Bulk Density | As per customer requirement |
+| 13 | Tapped Density | As per customer requirement |
+
+> **This is your SPEC-Template optional-test mechanism, validated by the real document.** The SPEC literally separates "Additional Tests (on customer request, this is not part of typical specification)." These three map to `is_optional = true` template tests that a batch activates via `optionalTestIds`.
+
+### Elemental impurities by AAS (ICH Q3D) — test group #14, 10 metals
+
+**Note the discrepancy:** the SPEC sheet lists most as generic "Lowest detection limit NMT 0.5 µg/g," but the AWS worksheet and COA carry the REAL per-element ICH Q3D limits below. **The per-element limits are the meaningful ones.**
+
+| Metal | Class (ICH Q3D) | Real Limit (AWS/COA) |
+|---|---|---|
+| Lead (Pb) | I | NMT 0.5 µg/g |
+| Arsenic (As) | I | NMT 0.5 µg/g |
+| Mercury (Hg) | I | NMT 0.1 µg/g |
+| Cadmium (Cd) | I | NMT 0.5 µg/g |
+| Cobalt (Co) | IIA | NMT 5.0 µg/g |
+| Vanadium (V) | IIA | NMT 10.0 µg/g |
+| Nickel (Ni) | IIA | NMT 20.0 µg/g |
+| Lithium (Li) | III | NMT 25.0 µg/g |
+| Antimony (Sb) | III | NMT 9.0 µg/g |
+| Copper (Cu) | III | NMT 30.0 µg/g |
+
+### Microbiological parameters — test group #18
+
+| Test | Acceptance Criteria |
+|---|---|
+| Bacterial endotoxin test | NMT 5 EU/g |
+| Pathogen in general | Should be absent |
+| TAMC (Total Aerobic Microbial Count) | NMT 10³ CFU/g |
+| TYMC (Total Yeast/Mould Count) | NMT 10² CFU/g |
+| Escherichia coli | Should be absent |
+| Salmonella | Should be absent |
+| Pseudomonas aeruginosa | Should be absent |
+| Staphylococcus aureus | Should be absent |
+| Coliforms | Should be absent |
+
+---
+
+## 3. Key Calculation Formulas (from MOA / AWS)
+
+### Assay (on dried basis)
+```
+% Assay = ((Vs - Vb) × M × F × 100 × 100) / (0.1 × W × (100 - %LOD))
+```
+- Vs = sample titrant volume (ml of 0.1 M perchloric acid)
+- Vb = blank titrant volume
+- M  = molarity of perchloric acid (0.1 M)
+- F  = 0.00751 g of C₂H₅NO₂ per ml of 0.1 M perchloric acid (equivalence factor)
+- W  = sample weight (g)
+- %LOD = loss on drying result (the dried-basis correction term)
+- **Worked example in real AWS → 99.72 %**
+
+> **Reconcile:** the placeholder seed's Assay formula likely omits the `(100 - %LOD)` dried-basis correction. The real formula needs it, and it makes the Assay depend on the LOD test result.
+
+### Sulphated ash
+```
+Sulphated Ash % = (Weight of residue × 100) / Weight of sample
+```
+Real example: 0.0004 × 100 / 1.0003 = 0.04 %
+
+### Loss on drying
+```
+% LOD = (Loss in weight × 100) / Weight of sample
+```
+Real example: 0.0025 × 100 / 1.0004 = 0.25 %
+
+### Elemental impurities (AAS)
+```
+Content (µg/g) = Content of specific element (software-calculated) × SD / W
+```
+
+---
+
+## 4. Real Batch Values (COA GCN/010226 — for a "COMPLIES" demo path)
+
+| Test | Result | Limit | Conclusion |
+|---|---|---|---|
+| Description | A white, crystalline powder; odorless | A white crystalline powder | Complies |
+| Solubility | Complies | (as above) | Complies |
+| Identification A (IR) | Complies (purity index 0.9979) | concordant | Complies |
+| Identification B (chemical) | Complies | violet→orange→yellow | Complies |
+| Appearance of solution | Complies | clear, ≤ YS7 | Complies |
+| pH | 6.02 | 5.9–6.3 | Complies |
+| Heavy metals | < 10 ppm | NMT 10 ppm | Complies |
+| Chlorides | < 100 ppm | NMT 100 ppm | Complies |
+| Sulphated ash | 0.04 % | NMT 0.1 % | Complies |
+| Loss on drying | 0.25 % | NMT 0.5 % | Complies |
+| Assay | 99.72 % | 98.5–101.5 % | Complies |
+
+**Overall verdict: COMPLIES** — this is the realistic "happy path" batch for the end-to-end demo.
+
+---
+
+## 5. Signature Lineage (maps to the 3-stage chain + 2-person AWS rule)
+
+Every page: **Prepared By** (QC Executive) → **Checked By** (QC Manager) → **Approved By** (QA Manager).
+The AWS additionally carries **Analyzed By** / **Checked By** per section (the ICH Q7 two-person rule built in Epic 12b).
+
+Real names on the documents (for reference; map to seed users as appropriate):
+- Prepared/Executive-QC: Twinkal Tarapara / Krupa Majethia
+- Checked/Manager-QC: Dipak Prajapati
+- Approved/Manager-QA: Mahesh Patel / Simran Shaikh
+- Analyzed By (AWS): CH. ; Checked By (AWS): D.R. Prajapati
+
+---
+
+## 6. Revision History (real — note the Change-Control links)
+
+| Spec / MOA Rev | Change | Ref. CC No. | Effective |
+|---|---|---|---|
+| R-00 | New specification | — | 21/04/2021 |
+| R-01 | Format revised per SOP QC/12; some contents per FSSAI | CC/2022/003 | 01/06/2022 |
+| R-02 | Elemental impurity by AAS added; Ethylene oxide test added | CC/2023/010 | 01/06/2023 |
+
+> **Relevant to Epic 27 (Change Control):** these real CC numbers (`CC/2022/003`, `CC/2023/010`) show the **actual CC numbering format the client uses** — `CC/YYYY/NNN`. This is direct evidence for resolving the open OI-CC numbering question. The format is `CC/<year>/<3-digit sequence>`.
+
+---
+
+## 7. Reconciliation Checklist (to run against the Product Master)
+
+When the Master arrives, confirm each:
+
+- [ ] Master is the revision that PRODUCES SPEC/MOA Rev 02 (or note the mismatch)
+- [ ] Test count matches (~18 groups, not 4) — Description, Solubility, ID A/B, Appearance, pH, Chlorides, Heavy metals, Sulphated ash, LOD, Assay, + AAS block (10), + Micro block (9), + Foreign matter, OVI, Ethylene oxide
+- [ ] Optional tests flagged correctly: Sieve, Bulk Density, Tapped Density = `is_optional`
+- [ ] Assay formula includes the `(100 - %LOD)` dried-basis correction and F = 0.00751
+- [ ] Elemental limits use the per-element values (Co 5.0, V 10.0, Ni 20.0, Li 25.0, Sb 9.0, Cu 30.0; Pb/As/Cd 0.5; Hg 0.1) — NOT the generic "NMT 0.5"
+- [ ] Outside-lab tests flagged: OVI/Residual solvent, Ethylene oxide (`is_outside_lab = true`)
+- [ ] Shelf life: documents say raw-material shelf life 5 years; confirm the FINISHED-product shelf life used for batch expiry (batch GCN/010226: Mfg Feb 2026 → Exp Jan 2031 ≈ 60 months / 5 years)
+- [ ] Product code: reconcile FG00038 (SPEC/MOA) vs GCN (AWS/ARN) dual-code convention
+- [ ] CC numbering format `CC/YYYY/NNN` feeds the OI-CC decision for Epic 27

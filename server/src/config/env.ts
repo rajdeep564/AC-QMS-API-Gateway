@@ -1,0 +1,34 @@
+import "dotenv/config";
+import { z } from "zod";
+
+const envSchema = z.object({
+  DATABASE_URL: z.string().min(1),
+  JWT_SECRET: z.string().min(32),
+  JWT_ACCESS_EXPIRY: z.string().min(1),
+  JWT_REFRESH_EXPIRY: z.string().min(1),
+  BCRYPT_ROUNDS: z.coerce.number().int().min(10).max(15),
+  PORT: z.coerce.number().int().positive(),
+  CORS_ORIGIN: z.string().url(),
+  NODE_ENV: z.enum(["development", "production", "test"]),
+});
+
+const parsed = envSchema.safeParse(process.env);
+
+if (!parsed.success) {
+  const formatted = parsed.error.flatten().fieldErrors;
+  throw new Error(`Invalid environment variables: ${JSON.stringify(formatted)}`);
+}
+
+const env = parsed.data;
+
+export const config = {
+  databaseUrl: env.DATABASE_URL,
+  jwtSecret: env.JWT_SECRET,
+  jwtAccessExpiry: env.JWT_ACCESS_EXPIRY,
+  jwtRefreshExpiry: env.JWT_REFRESH_EXPIRY,
+  bcryptRounds: env.BCRYPT_ROUNDS,
+  port: env.PORT,
+  corsOrigin: env.CORS_ORIGIN,
+  nodeEnv: env.NODE_ENV,
+  isProduction: env.NODE_ENV === "production",
+} as const;
