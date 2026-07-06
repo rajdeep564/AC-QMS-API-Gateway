@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "lib": ["ES2022"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*", "prisma/**/*"],
+  "exclude": [
+    "src/modules/spec-templates/**/*",
+    "src/modules/marketing/**/*",
+    "src/services/workflow-engine-legacy.ts",
+    "src/services/aws-skeleton-create.service.ts",
+    "src/services/moa-auto-create.service.ts",
+    "src/utils/doc-number.ts",
+    "src/fixtures/glycine-batch-fixture.ts",
+    "scripts/verify-epic12c.ts",
+    "scripts/verify-epic15.ts",
+    "scripts/verify-epic16.ts"
+  ]
+}

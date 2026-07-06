@@ -1,5 +1,11 @@
 # AC-QMS Documentation Index
 
+## Start here
+
+| Document | Purpose |
+|---|---|
+| [qms-flow-plain-language.md](qms-flow-plain-language.md) | **How the system works** — batch journey, roles, and approvals in plain language |
+
 ## Glycine IP audit (June 2026)
 
 | Document | Purpose |
@@ -17,4 +23,4 @@
 
 ## Server architecture
 
-See [server/ARCHITECTURE.md](../server/ARCHITECTURE.md) for API layering and Epic implementation notes.
+See [ARCHITECTURE.md](../ARCHITECTURE.md) for API layering and Epic implementation notes.

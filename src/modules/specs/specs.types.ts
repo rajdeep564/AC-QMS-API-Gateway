@@ -1,0 +1,71 @@
+import { Operator, ResultType, SpecVariant, StandingDocStatus } from "@prisma/client";
+import { WorkflowAction } from "../../services/workflow.config";
+
+export type SpecTestDto = {
+  id: string;
+  sortOrder: number;
+  testName: string;
+  resultType: ResultType;
+  operator: Operator | null;
+  minValue: string | null;
+  maxValue: string | null;
+  uom: string | null;
+  acceptanceCriteria: string | null;
+  formula: string | null;
+  formulaVariables: unknown;
+  isOptional: boolean;
+  isOutsideLab: boolean;
+};
+
+export type MoaSectionDto = {
+  id: string;
+  specTestId: string;
+  pharmacopoeia: string | null;
+  samplePreparation: string | null;
+  standardPreparation: string | null;
+  blankPreparation: string | null;
+  conclusionTemplate: string | null;
+  additionalNotes: string | null;
+};
+
+export type MoaDocDto = {
+  id: string;
+  moaNo: string;
+  revisionNo: number;
+  status: StandingDocStatus;
+  sections: MoaSectionDto[];
+};
+
+export type SpecListItemDto = {
+  id: string;
+  productId: string;
+  variant: SpecVariant;
+  specNo: string;
+  revisionNo: number;
+  status: StandingDocStatus;
+  createdById: string;
+  approvedAt: Date | null;
+  effectiveDate: Date | null;
+  createdAt: Date;
+  hasMoa: boolean;
+};
+
+export type SpecDetailDto = {
+  id: string;
+  productId: string;
+  variant: SpecVariant;
+  specNo: string;
+  revisionNo: number;
+  status: StandingDocStatus;
+  supersedesId: string | null;
+  createdById: string;
+  submittedById: string | null;
+  qcApprovedById: string | null;
+  qaSignedById: string | null;
+  approvedAt: Date | null;
+  effectiveDate: Date | null;
+  createdAt: Date;
+  tests: SpecTestDto[];
+  moa: MoaDocDto | null;
+  allowedActions: WorkflowAction[];
+};
