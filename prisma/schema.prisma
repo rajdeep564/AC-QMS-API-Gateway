@@ -1,0 +1,627 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums — Rev 2.3
+// ---------------------------------------------------------------------------
+
+enum Role {
+  SADMIN
+  QC_EXEC
+  QC_MGR
+  QA_EXEC
+  QA_MGR
+  MKT_EXEC
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  LOCKED
+}
+
+enum DeptName {
+  QC
+  QA
+  MARKETING
+}
+
+enum MasterStatus {
+  DRAFT
+  ACTIVE
+  SUPERSEDED
+}
+
+enum FieldDataType {
+  TEXT
+  NUMBER
+  DATE
+}
+
+enum SpecVariant {
+  GENERAL
+  CUSTOMER
+}
+
+enum StandingDocStatus {
+  DRAFT
+  SUBMITTED
+  QC_APPROVED
+  QA_SIGNED
+  SUPERSEDED
+}
+
+enum ResultType {
+  QUALITATIVE
+  QUANTITATIVE
+}
+
+enum Operator {
+  NMT
+  NLT
+  BETWEEN
+  EQUALS
+  TEXT
+}
+
+enum BatchStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  RELEASED
+}
+
+enum DocType {
+  AWS
+  COA
+}
+
+enum DocStatus {
+  PENDING
+  DRAFT
+  SUBMITTED
+  QC_APPROVED
+  QA_SIGNED
+  REJECTED
+  AUTO_GENERATED
+  ISSUED
+}
+
+enum SectionStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  AWAITING_CHECK
+  COMPLETE
+}
+
+enum Conclusion {
+  SATISFACTORY
+  NOT_SATISFACTORY
+  PASS
+  FAIL
+}
+
+enum CoaComplianceVerdict {
+  COMPLIES
+  DOES_NOT_COMPLY
+}
+
+enum FileType {
+  DOCX
+  PDF
+  READING_ATTACHMENT
+}
+
+enum CCStatus {
+  DRAFT
+  UNDER_REVIEW
+  APPROVED
+  CLOSED
+}
+
+enum CCCategory {
+  MINOR
+  MAJOR
+  CRITICAL
+}
+
+// ---------------------------------------------------------------------------
+// Core Identity
+// ---------------------------------------------------------------------------
+
+model User {
+  id             String     @id @default(uuid()) @db.Uuid
+  fullName       String     @map("full_name")
+  username       String     @unique
+  email          String     @unique
+  passwordHash   String     @map("password_hash")
+  role           Role
+  departmentId   String?    @map("department_id") @db.Uuid
+  status         UserStatus @default(ACTIVE)
+  forcePwdChange Boolean    @default(true) @map("force_pwd_change")
+  lastLoginAt    DateTime?  @map("last_login_at") @db.Timestamptz
+  failedAttempts Int        @default(0) @map("failed_attempts")
+  lockedUntil    DateTime?  @map("locked_until") @db.Timestamptz
+  createdAt      DateTime   @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime   @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt      DateTime?  @map("deleted_at") @db.Timestamptz
+
+  department Department? @relation(fields: [departmentId], references: [id])
+
+  productMastersCreated    ProductMaster[]             @relation("PmCreatedBy")
+  productMastersAssigned   ProductMaster[]             @relation("PmAssignedTo")
+  productMastersApproved   ProductMaster[]             @relation("PmApprovedBy")
+  specsCreated             Spec[]                      @relation("SpecCreatedBy")
+  specsSubmitted           Spec[]                      @relation("SpecSubmittedBy")
+  specsQcApproved          Spec[]                      @relation("SpecQcApprovedBy")
+  specsQaSigned            Spec[]                      @relation("SpecQaSignedBy")
+  batchesCreated           Batch[]                     @relation("BatchCreatedBy")
+  batchesApproved          Batch[]                     @relation("BatchApprovedBy")
+  batchesAssignedQc        Batch[]                     @relation("BatchAssignedQc")
+  batchDocumentsCreated    BatchDocument[]             @relation("BdCreatedBy")
+  batchDocumentsSubmitted  BatchDocument[]             @relation("BdSubmittedBy")
+  batchDocumentsQcApproved BatchDocument[]             @relation("BdQcApprovedBy")
+  batchDocumentsQaSigned   BatchDocument[]             @relation("BdQaSignedBy")
+  awsSectionsAnalyst       AwsSection[]                @relation("AwsAnalyst")
+  awsSectionsChecker       AwsSection[]                @relation("AwsChecker")
+  changeControlsRaised     ChangeControl[]             @relation("CcRaisedBy")
+  ccNotificationsAcked     ChangeControlNotification[] @relation("CcnAcknowledgedBy")
+  notifications            Notification[]              @relation("NotificationUser")
+  sessions                 Session[]                   @relation("SessionUser")
+
+  @@map("users")
+}
+
+model Department {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        DeptName @unique
+  colorHex    String?  @map("color_hex")
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  users                      User[]
+  changeControlNotifications ChangeControlNotification[]
+
+  @@map("departments")
+}
+
+// ---------------------------------------------------------------------------
+// Product Configuration
+// ---------------------------------------------------------------------------
+
+model Product {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @db.VarChar(200)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  productMasters ProductMaster[]
+  specs          Spec[]
+  batches        Batch[]
+
+  @@map("products")
+}
+
+model ProductMaster {
+  id               String       @id @default(uuid()) @db.Uuid
+  productId        String       @map("product_id") @db.Uuid
+  revisionNo       Int          @map("revision_no")
+  status           MasterStatus
+  effectiveDate    DateTime?    @map("effective_date") @db.Date
+  supersedesId     String?      @map("supersedes_id") @db.Uuid
+  createdById      String       @map("created_by") @db.Uuid
+  assignedToId     String?      @map("assigned_to") @db.Uuid
+  approvedById     String?      @map("approved_by") @db.Uuid
+  approvedAt       DateTime?    @map("approved_at") @db.Timestamptz
+  rejectionComment String?      @map("rejection_comment")
+  importedFrom     String?      @map("imported_from") @db.VarChar(255)
+  createdAt        DateTime     @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime     @updatedAt @map("updated_at") @db.Timestamptz
+
+  product      Product              @relation(fields: [productId], references: [id])
+  supersedes   ProductMaster?       @relation("ProductMasterSupersedes", fields: [supersedesId], references: [id])
+  supersededBy ProductMaster[]      @relation("ProductMasterSupersedes")
+  createdBy    User                 @relation("PmCreatedBy", fields: [createdById], references: [id])
+  assignedTo   User?                @relation("PmAssignedTo", fields: [assignedToId], references: [id])
+  approvedBy   User?                @relation("PmApprovedBy", fields: [approvedById], references: [id])
+  fields       ProductMasterField[]
+
+  @@map("product_masters")
+}
+
+model ProductMasterField {
+  id              String        @id @default(uuid()) @db.Uuid
+  productMasterId String        @map("product_master_id") @db.Uuid
+  fieldKey        String        @map("field_key") @db.VarChar(80)
+  label           String        @db.VarChar(200)
+  value           String?
+  dataType        FieldDataType @map("data_type")
+  sortOrder       Int           @map("sort_order")
+  isRequired      Boolean       @default(false) @map("is_required")
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime      @updatedAt @map("updated_at") @db.Timestamptz
+
+  productMaster ProductMaster @relation(fields: [productMasterId], references: [id], onDelete: Cascade)
+
+  @@index([productMasterId])
+  @@map("product_master_fields")
+}
+
+// ---------------------------------------------------------------------------
+// Standing Product Documents (Session 2)
+// ---------------------------------------------------------------------------
+
+model Spec {
+  id             String            @id @default(uuid()) @db.Uuid
+  productId      String            @map("product_id") @db.Uuid
+  variant        SpecVariant
+  customerId     String?           @map("customer_id") @db.Uuid
+  specNo         String            @map("spec_no") @db.VarChar(80)
+  revisionNo     Int               @map("revision_no")
+  status         StandingDocStatus
+  createdById    String            @map("created_by") @db.Uuid
+  submittedById  String?           @map("submitted_by") @db.Uuid
+  qcApprovedById String?           @map("qc_approved_by") @db.Uuid
+  qaSignedById   String?           @map("qa_signed_by") @db.Uuid
+  approvedAt     DateTime?         @map("approved_at") @db.Timestamptz
+  effectiveDate  DateTime?         @map("effective_date") @db.Date
+  supersedesId   String?           @map("supersedes_id") @db.Uuid
+  createdAt      DateTime          @default(now()) @map("created_at") @db.Timestamptz
+
+  product      Product          @relation(fields: [productId], references: [id])
+  supersedes   Spec?            @relation("SpecSupersedes", fields: [supersedesId], references: [id])
+  supersededBy Spec[]           @relation("SpecSupersedes")
+  createdBy    User             @relation("SpecCreatedBy", fields: [createdById], references: [id])
+  submittedBy  User?            @relation("SpecSubmittedBy", fields: [submittedById], references: [id])
+  qcApprovedBy User?            @relation("SpecQcApprovedBy", fields: [qcApprovedById], references: [id])
+  qaSignedBy   User?            @relation("SpecQaSignedBy", fields: [qaSignedById], references: [id])
+  specTests    SpecTest[]
+  moaDoc       MoaDoc?
+  batches      Batch[]
+  attachments  FileAttachment[]
+
+  @@map("specs")
+}
+
+model SpecTest {
+  id                 String     @id @default(uuid()) @db.Uuid
+  specId             String     @map("spec_id") @db.Uuid
+  sortOrder          Int        @map("sort_order")
+  testName           String     @map("test_name") @db.VarChar(200)
+  resultType         ResultType @map("result_type")
+  operator           Operator?
+  minValue           Decimal?   @map("min_value") @db.Decimal(15, 6)
+  maxValue           Decimal?   @map("max_value") @db.Decimal(15, 6)
+  uom                String?    @db.VarChar(40)
+  acceptanceCriteria String?    @map("acceptance_criteria")
+  formula            String?
+  formulaVariables   Json?      @map("formula_variables")
+  isOptional         Boolean    @default(false) @map("is_optional")
+  isOutsideLab       Boolean    @default(false) @map("is_outside_lab")
+  createdAt          DateTime   @default(now()) @map("created_at") @db.Timestamptz
+
+  spec              Spec               @relation(fields: [specId], references: [id])
+  moaDocSections    MoaDocSection[]
+  specDocumentTests SpecDocumentTest[]
+
+  @@map("spec_tests")
+}
+
+model MoaDoc {
+  id         String            @id @default(uuid()) @db.Uuid
+  specId     String            @unique @map("spec_id") @db.Uuid
+  moaNo      String            @map("moa_no") @db.VarChar(80)
+  revisionNo Int               @map("revision_no")
+  status     StandingDocStatus
+  createdAt  DateTime          @default(now()) @map("created_at") @db.Timestamptz
+
+  spec     Spec            @relation(fields: [specId], references: [id])
+  sections MoaDocSection[]
+
+  @@map("moa_docs")
+}
+
+model MoaDocSection {
+  id                  String   @id @default(uuid()) @db.Uuid
+  moaDocId            String   @map("moa_doc_id") @db.Uuid
+  specTestId          String   @map("spec_test_id") @db.Uuid
+  pharmacopoeia       String?  @db.VarChar(50)
+  samplePreparation   String?  @map("sample_preparation")
+  standardPreparation String?  @map("standard_preparation")
+  blankPreparation    String?  @map("blank_preparation")
+  conclusionTemplate  String?  @map("conclusion_template")
+  additionalNotes     String?  @map("additional_notes")
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  moaDoc              MoaDoc               @relation(fields: [moaDocId], references: [id])
+  specTest            SpecTest             @relation(fields: [specTestId], references: [id])
+  moaDocumentSections MoaDocumentSection[]
+
+  @@map("moa_doc_sections")
+}
+
+// ---------------------------------------------------------------------------
+// Batch Lifecycle (Session 3)
+// ---------------------------------------------------------------------------
+
+model Batch {
+  id               String      @id @default(uuid()) @db.Uuid
+  productId        String      @map("product_id") @db.Uuid
+  sourceSpecId     String      @map("source_spec_id") @db.Uuid
+  batchNo          String      @unique @map("batch_no") @db.VarChar(80)
+  arnNo            String?     @map("arn_no") @db.VarChar(80)
+  assignedQcExecId String?     @map("assigned_qc_exec_id") @db.Uuid
+  status           BatchStatus
+  mfgDate          DateTime?   @map("mfg_date") @db.Date
+  expDate          DateTime?   @map("exp_date") @db.Date
+  batchSize        String?     @map("batch_size") @db.VarChar(60)
+  createdById      String      @map("created_by") @db.Uuid
+  approvedById     String?     @map("approved_by") @db.Uuid
+  createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz
+
+  product        Product              @relation(fields: [productId], references: [id])
+  sourceSpec     Spec                 @relation(fields: [sourceSpecId], references: [id])
+  assignedQcExec User?                @relation("BatchAssignedQc", fields: [assignedQcExecId], references: [id])
+  createdBy      User                 @relation("BatchCreatedBy", fields: [createdById], references: [id])
+  approvedBy     User?                @relation("BatchApprovedBy", fields: [approvedById], references: [id])
+  batchDocuments BatchDocument[]
+  specDocTests   SpecDocumentTest[]
+  moaDocSections MoaDocumentSection[]
+
+  @@map("batches")
+}
+
+model BatchDocument {
+  id                String                @id @default(uuid()) @db.Uuid
+  batchId           String                @map("batch_id") @db.Uuid
+  docType           DocType               @map("doc_type")
+  docNo             String                @map("doc_no") @db.VarChar(80)
+  status            DocStatus
+  complianceVerdict CoaComplianceVerdict? @map("compliance_verdict")
+  createdById       String?               @map("created_by") @db.Uuid
+  submittedById     String?               @map("submitted_by") @db.Uuid
+  qcApprovedById    String?               @map("qc_approved_by") @db.Uuid
+  qaSignedById      String?               @map("qa_signed_by") @db.Uuid
+  createdAt         DateTime              @default(now()) @map("created_at") @db.Timestamptz
+
+  batch        Batch            @relation(fields: [batchId], references: [id])
+  createdBy    User?            @relation("BdCreatedBy", fields: [createdById], references: [id])
+  submittedBy  User?            @relation("BdSubmittedBy", fields: [submittedById], references: [id])
+  qcApprovedBy User?            @relation("BdQcApprovedBy", fields: [qcApprovedById], references: [id])
+  qaSignedBy   User?            @relation("BdQaSignedBy", fields: [qaSignedById], references: [id])
+  awsSections  AwsSection[]
+  coaResults   CoaResult[]
+  attachments  FileAttachment[]
+
+  @@index([batchId, docType])
+  @@map("batch_documents")
+}
+
+model SpecDocumentTest {
+  id                 String     @id @default(uuid()) @db.Uuid
+  batchId            String     @map("batch_id") @db.Uuid
+  sourceSpecTestId   String?    @map("source_spec_test_id") @db.Uuid
+  testName           String     @map("test_name") @db.VarChar(200)
+  resultType         ResultType @map("result_type")
+  operator           Operator?
+  minValue           Decimal?   @map("min_value") @db.Decimal(15, 6)
+  maxValue           Decimal?   @map("max_value") @db.Decimal(15, 6)
+  uom                String?    @db.VarChar(40)
+  acceptanceCriteria String?    @map("acceptance_criteria")
+  formula            String?
+  sortOrder          Int        @map("sort_order")
+  createdAt          DateTime   @default(now()) @map("created_at") @db.Timestamptz
+
+  batch          Batch                @relation(fields: [batchId], references: [id])
+  sourceSpecTest SpecTest?            @relation(fields: [sourceSpecTestId], references: [id])
+  moaDocSections MoaDocumentSection[]
+  awsSections    AwsSection[]
+
+  @@index([batchId])
+  @@map("spec_document_tests")
+}
+
+model MoaDocumentSection {
+  id                 String   @id @default(uuid()) @db.Uuid
+  batchId            String   @map("batch_id") @db.Uuid
+  sourceMoaSectionId String?  @map("source_moa_section_id") @db.Uuid
+  specDocumentTestId String   @map("spec_document_test_id") @db.Uuid
+  procedureSnapshot  String?  @map("procedure_snapshot")
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  batch            Batch            @relation(fields: [batchId], references: [id])
+  sourceMoaSection MoaDocSection?   @relation(fields: [sourceMoaSectionId], references: [id])
+  specDocumentTest SpecDocumentTest @relation(fields: [specDocumentTestId], references: [id])
+
+  @@index([batchId])
+  @@map("moa_document_sections")
+}
+
+model AwsSection {
+  id                 String        @id @default(uuid()) @db.Uuid
+  batchDocumentId    String        @map("batch_document_id") @db.Uuid
+  specDocumentTestId String        @map("spec_document_test_id") @db.Uuid
+  status             SectionStatus
+  readings           Json?
+  calculatedResult   Decimal?      @map("calculated_result") @db.Decimal(15, 6)
+  resultDisplay      String?       @map("result_display") @db.VarChar(120)
+  conclusion         Conclusion?
+  isOos              Boolean       @default(false) @map("is_oos")
+  analystId          String?       @map("analyst_id") @db.Uuid
+  checkerId          String?       @map("checker_id") @db.Uuid
+  instrumentId       String?       @map("instrument_id") @db.Uuid
+  reagentId          String?       @map("reagent_id") @db.Uuid
+  createdAt          DateTime      @default(now()) @map("created_at") @db.Timestamptz
+
+  batchDocument    BatchDocument    @relation(fields: [batchDocumentId], references: [id])
+  specDocumentTest SpecDocumentTest @relation(fields: [specDocumentTestId], references: [id])
+  analyst          User?            @relation("AwsAnalyst", fields: [analystId], references: [id])
+  checker          User?            @relation("AwsChecker", fields: [checkerId], references: [id])
+  instrument       Instrument?      @relation(fields: [instrumentId], references: [id])
+  reagent          Reagent?         @relation(fields: [reagentId], references: [id])
+
+  @@index([batchDocumentId])
+  @@map("aws_sections")
+}
+
+model CoaResult {
+  id               String  @id @default(uuid()) @db.Uuid
+  batchDocumentId  String  @map("batch_document_id") @db.Uuid
+  testName         String  @map("test_name") @db.VarChar(200)
+  result           String  @db.VarChar(200)
+  acceptanceLimits String? @map("acceptance_limits") @db.VarChar(200)
+  conclusion       String? @db.VarChar(40)
+  sortOrder        Int     @map("sort_order")
+
+  batchDocument BatchDocument @relation(fields: [batchDocumentId], references: [id])
+
+  @@map("coa_results")
+}
+
+model FileAttachment {
+  id              String   @id @default(uuid()) @db.Uuid
+  batchDocumentId String?  @map("batch_document_id") @db.Uuid
+  specId          String?  @map("spec_id") @db.Uuid
+  fileType        FileType @map("file_type")
+  filePath        String   @map("file_path") @db.VarChar(500)
+  generatedBy     String?  @map("generated_by") @db.VarChar(60)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  batchDocument BatchDocument? @relation(fields: [batchDocumentId], references: [id])
+  spec          Spec?          @relation(fields: [specId], references: [id])
+
+  @@map("file_attachments")
+}
+
+// ---------------------------------------------------------------------------
+// Reference Masters
+// ---------------------------------------------------------------------------
+
+model Instrument {
+  id              String    @id @default(uuid()) @db.Uuid
+  instrumentId    String    @unique @map("instrument_id") @db.VarChar(60)
+  name            String?   @db.VarChar(200)
+  calibrationDate DateTime? @map("calibration_date") @db.Date
+  useBefore       DateTime? @map("use_before") @db.Date
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  awsSections AwsSection[]
+
+  @@map("instruments")
+}
+
+model Reagent {
+  id         String    @id @default(uuid()) @db.Uuid
+  name       String    @db.VarChar(200)
+  lotNo      String?   @map("lot_no") @db.VarChar(80)
+  expiryDate DateTime? @map("expiry_date") @db.Date
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  awsSections AwsSection[]
+
+  @@map("reagents")
+}
+
+// ---------------------------------------------------------------------------
+// Change Control
+// ---------------------------------------------------------------------------
+
+model ChangeControl {
+  id         String      @id @default(uuid()) @db.Uuid
+  ccNo       String      @unique @map("cc_no") @db.VarChar(60)
+  title      String      @db.VarChar(300)
+  status     CCStatus
+  category   CCCategory?
+  raisedById String      @map("raised_by") @db.Uuid
+  createdAt  DateTime    @default(now()) @map("created_at") @db.Timestamptz
+
+  raisedBy      User                        @relation("CcRaisedBy", fields: [raisedById], references: [id])
+  notifications ChangeControlNotification[]
+
+  @@map("change_controls")
+}
+
+model ChangeControlNotification {
+  id               String   @id @default(uuid()) @db.Uuid
+  changeControlId  String   @map("change_control_id") @db.Uuid
+  recipientScope   String?  @map("recipient_scope") @db.VarChar(120)
+  acknowledgedById String?  @map("acknowledged_by") @db.Uuid
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  changeControl  ChangeControl @relation(fields: [changeControlId], references: [id])
+  acknowledgedBy User?         @relation("CcnAcknowledgedBy", fields: [acknowledgedById], references: [id])
+  Department     Department?   @relation(fields: [departmentId], references: [id])
+  departmentId   String?       @db.Uuid
+
+  @@map("change_control_notifications")
+}
+
+// ---------------------------------------------------------------------------
+// System
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id           String   @id @default(uuid()) @db.Uuid
+  timestamp    DateTime @db.Timestamptz
+  userId       String?  @map("user_id") @db.Uuid
+  userName     String?  @map("user_name")
+  role         String?
+  department   String?
+  action       String
+  entityType   String   @map("entity_type")
+  entityId     String?  @map("entity_id") @db.Uuid
+  docNo        String?  @map("doc_no")
+  fieldChanged String?  @map("field_changed")
+  oldValue     String?  @map("old_value")
+  newValue     String?  @map("new_value")
+  comment      String?
+  ipAddress    String?  @map("ip_address")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([timestamp(sort: Desc)])
+  @@index([entityType, entityId])
+  @@index([userId, timestamp(sort: Desc)])
+  @@map("audit_logs")
+}
+
+model Notification {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  type      String   @db.VarChar(60)
+  title     String   @db.VarChar(200)
+  message   String?
+  link      String?  @db.VarChar(300)
+  isRead    Boolean  @default(false) @map("is_read")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation("NotificationUser", fields: [userId], references: [id])
+
+  @@index([userId, isRead, createdAt(sort: Desc)])
+  @@map("notifications")
+}
+
+model Session {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  tokenHash String   @map("token_hash") @db.VarChar(255)
+  expiresAt DateTime @map("expires_at") @db.Timestamptz
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation("SessionUser", fields: [userId], references: [id])
+
+  @@map("sessions")
+}
+
+model ArnSequence {
+  id        String   @id @default(uuid()) @db.Uuid
+  fy        String   @unique @db.VarChar(12)
+  seq       Int
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@map("arn_sequences")
+}

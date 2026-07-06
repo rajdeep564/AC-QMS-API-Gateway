@@ -2,7 +2,7 @@
 
 **Status:** Proposed — implement after Product Master import  
 **Audit source:** [Glycine Downstream Audit](audits/glycine-downstream-audit.md)  
-**Problem:** Assay on dried basis requires `%LOD` from a **completed** Loss on Drying AWS section. Current [formula-engine.ts](../../server/src/services/formula-engine.ts) only reads variables from the **same section's** `observations`.
+**Problem:** Assay on dried basis requires `%LOD` from a **completed** Loss on Drying AWS section. Current [formula-engine.ts](../../src/services/formula-engine.ts) only reads variables from the **same section's** `observations`.
 
 ---
 
@@ -146,7 +146,7 @@ When `externalRefs` present:
 
 ## Glycine seed target (post-Master)
 
-Replace placeholder Assay in [seed.ts](../../server/prisma/seed.ts):
+Replace placeholder Assay in [seed.ts](../../prisma/seed.ts):
 
 | Field | Current (wrong) | Target |
 |---|---|---|
@@ -178,6 +178,6 @@ Replace placeholder Assay in [seed.ts](../../server/prisma/seed.ts):
 
 ## References
 
-- Engine: `server/src/services/formula-engine.ts`
-- Recompute: `server/src/modules/aws/aws.service.ts` → `recomputeSection`
+- Engine: `src/services/formula-engine.ts`
+- Recompute: `src/modules/aws/aws.service.ts` → `recomputeSection`
 - Ground truth formula: `docs/glycine_ip_groundtruth_reference.doc` §3

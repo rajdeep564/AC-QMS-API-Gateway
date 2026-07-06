@@ -2,7 +2,7 @@
 
 SOP-on-SOP PDF generation and printed document fidelity. **Core workflow logic is complete** (Epic 12c); this epic covers rendering, wording, and layout gaps identified in the [Glycine Downstream Audit](audits/glycine-downstream-audit.md).
 
-**Stub today:** `generateCoaPdf()` in `server/src/services/coa-generator.ts` is a no-op.
+**Stub today:** `generateCoaPdf()` in `src/services/coa-generator.ts` is a no-op.
 
 ---
 

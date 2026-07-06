@@ -128,7 +128,7 @@ Reconcile COA results against ground-truth batch `GCN/010226`:
 ## Quick commands (after seed update)
 
 ```bash
-cd server
+npm run db:up
 npm run seed
 npm run verify:12c
 npm run verify:16
