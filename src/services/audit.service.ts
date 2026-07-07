@@ -59,8 +59,12 @@ export type AuditInput = {
 };
 
 export async function log(input: AuditInput, client?: Db): Promise<void> {
-  try {
+  if (client !== undefined) {
     await createAuditLog(input, client);
+    return;
+  }
+  try {
+    await createAuditLog(input);
   } catch (error) {
     auditLogger.error({ err: error, input }, "Failed to write audit log");
   }
