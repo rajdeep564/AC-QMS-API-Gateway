@@ -26,13 +26,13 @@ import type {
 
 export const listSections = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
   const { awsDocId } = req.params;
-  const result = await listAwsSections(awsDocId);
+  const result = await listAwsSections(awsDocId, req.user);
   res.json(ok(result));
 });
 
 export const getSectionById = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
   const { id } = req.params;
-  const section = await getAwsSectionDetail(id);
+  const section = await getAwsSectionDetail(id, req.user);
   res.json(ok(section));
 });
 

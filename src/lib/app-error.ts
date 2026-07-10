@@ -118,6 +118,10 @@ export class AppError extends Error {
     return AppError.fromCode("COA_NOT_SIGNABLE", message);
   }
 
+  static coaNotEditable(message?: string): AppError {
+    return AppError.fromCode("COA_NOT_EDITABLE", message);
+  }
+
   static notImplemented(message?: string): AppError {
     return AppError.fromCode("FEATURE_NOT_IMPLEMENTED", message);
   }

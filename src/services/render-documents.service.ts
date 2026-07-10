@@ -1,4 +1,5 @@
 import { createModuleLogger } from "../lib/logger";
+import type { Db } from "../lib/prisma-types";
 import { AuditAction, AuditEntityType, log as auditLog } from "./audit.service";
 
 const log = createModuleLogger("render-documents");
@@ -15,6 +16,7 @@ export async function renderDocuments(
   docType: RenderDocType,
   entityId: string,
   meta?: { userId?: string; docNo?: string },
+  client?: Db,
 ): Promise<RenderDocumentsResult> {
   log.info({ docType, entityId }, "TODO Epic 21: queue document render via Python microservice");
 
@@ -25,14 +27,17 @@ export async function renderDocuments(
         ? AuditEntityType.AWS
         : AuditEntityType.COA;
 
-  await auditLog({
-    userId: meta?.userId,
-    action: AuditAction.GENERATE,
-    entityType: auditEntityType,
-    entityId,
-    docNo: meta?.docNo,
-    comment: `${docType} render queued — Epic 21 Python integration pending`,
-  });
+  await auditLog(
+    {
+      userId: meta?.userId,
+      action: AuditAction.GENERATE,
+      entityType: auditEntityType,
+      entityId,
+      docNo: meta?.docNo,
+      comment: `${docType} render queued — Epic 21 Python integration pending`,
+    },
+    client,
+  );
 
   return {
     status: "queued",

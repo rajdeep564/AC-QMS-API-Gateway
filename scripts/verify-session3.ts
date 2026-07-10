@@ -67,6 +67,7 @@ const SAMPLE_SPEC_BODY: CreateSpecBody = {
       minValue: 99.0,
       uom: "%",
       formula: "result",
+      formulaVariables: { variables: [{ name: "result" }] },
     },
   ],
   moaSections: [
@@ -247,7 +248,7 @@ async function main() {
 
   // 5 — Batch lock + AWS open
   await submitBatch(created.batch.id, actor(priya.id, Role.QC_MGR));
-  await approveBatch(created.batch.id, actor(sanjay.id, Role.QA_MGR));
+  await approveBatch(created.batch.id, DEV_PASSWORD, actor(sanjay.id, Role.QA_MGR));
 
   const approved = await getBatchById(created.batch.id, actor(priya.id, Role.QC_MGR));
   if (approved.status !== BatchStatus.APPROVED) failures.push("Batch should be APPROVED");

@@ -43,8 +43,14 @@ export const transitionBodySchema = z.object({
   password: z.string().min(1),
 });
 
+/** AWS document SUBMIT — password not required per workflow-engine requiresPassword. */
+export const submitDocumentBodySchema = z.object({
+  password: z.string().min(1).optional(),
+});
+
 export type CreateMasterBody = z.infer<typeof createMasterBodySchema>;
 export type PatchFieldsBody = z.infer<typeof patchFieldsBodySchema>;
 export type RejectBody = z.infer<typeof rejectBodySchema>;
 export type AssignBody = z.infer<typeof assignBodySchema>;
 export type TransitionBody = z.infer<typeof transitionBodySchema>;
+export type SubmitDocumentBody = z.infer<typeof submitDocumentBodySchema>;

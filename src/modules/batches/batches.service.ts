@@ -1,11 +1,15 @@
 import { BatchStatus, Prisma, Role, SpecVariant, StandingDocStatus } from "@prisma/client";
+import { prisma } from "../../lib/prisma-types";
 import { AppError } from "../../lib/app-error";
 import { JwtAccessPayload } from "../../types/auth.types";
+import { AuditAction, AuditEntityType, log as auditLog } from "../../services/audit.service";
 import { parsePagination } from "../../utils/pagination";
 import { batchLink } from "../../services/notification-links";
 import { notify } from "../../services/notification.service";
 import { getAllowedBatchActions } from "../../services/workflow-engine";
+import { getUserById } from "../auth/auth.service";
 import * as authRepo from "../auth/auth.repository";
+import * as mastersRepo from "../masters/masters.repository";
 import * as specsRepo from "../specs/specs.repository";
 import { CreateBatchBody, ListBatchesQuery } from "./batches.schema";
 import {
@@ -73,6 +77,7 @@ function toBatchDetail(batch: BatchWithDetails, actor: JwtAccessPayload): BatchD
     createdById: batch.createdById,
     approvedById: batch.approvedById,
     createdAt: batch.createdAt,
+    releasedAt: batch.releasedAt,
     product: { id: batch.product.id, name: batch.product.name },
     sourceSpec: {
       id: batch.sourceSpec.id,
@@ -94,6 +99,19 @@ function toBatchDetail(batch: BatchWithDetails, actor: JwtAccessPayload): BatchD
       createdById: batch.createdById,
     }),
   };
+}
+
+async function getProductCodeFromActiveMaster(productId: string): Promise<string> {
+  const master = await mastersRepo.findActiveMasterForProduct(productId);
+  if (!master) {
+    throw AppError.conflict("An ACTIVE Product Master is required before batch creation");
+  }
+  const masterWithFields = await mastersRepo.findMasterWithFields(master.id);
+  const productCode = masterWithFields?.fields.find((f) => f.fieldKey === "product_code")?.value;
+  if (!productCode) {
+    throw AppError.conflict("ACTIVE master is missing product_code field");
+  }
+  return productCode;
 }
 
 async function validateAssignee(assignedQcExecId: string): Promise<void> {
@@ -148,6 +166,7 @@ export async function listBatches(query: ListBatchesQuery) {
     createdById: batch.createdById,
     approvedById: batch.approvedById,
     createdAt: batch.createdAt,
+    releasedAt: batch.releasedAt,
     product: batch.product ? { id: batch.product.id, name: batch.product.name } : undefined,
     assignedQcExec: batch.assignedQcExec
       ? { id: batch.assignedQcExec.id, fullName: batch.assignedQcExec.fullName }
@@ -168,6 +187,7 @@ export async function createBatch(
   productId: string,
   body: CreateBatchBody,
   actor: JwtAccessPayload,
+  ipAddress?: string,
 ): Promise<CreateBatchResultDto> {
   await validateAssignee(body.assignedQcExecId);
 
@@ -212,24 +232,50 @@ export async function createBatch(
       procedureSnapshot: buildProcedureSnapshot(section),
     }));
 
-  const batch = await batchesRepo.createBatchWithSnapshot(
-    {
-      productId,
-      sourceSpecId: body.sourceSpecId,
-      batchNo: body.batchNo,
-      createdById: actor.userId,
-      assignedQcExecId: body.assignedQcExecId,
-      mfgDate: body.mfgDate,
-      expDate: body.expDate,
-      batchSize: body.batchSize,
-    },
-    specTests,
-    moaSections,
-  );
+  const actorUser = await getUserById(actor.userId);
+  const assigneeName = await getAssigneeName(body.assignedQcExecId);
+  const productCode = await getProductCodeFromActiveMaster(productId);
 
-  if (!batch) {
-    throw AppError.fromCode("INTERNAL", "Batch creation failed");
-  }
+  const batch = await prisma.$transaction(async (tx) => {
+    const created = await batchesRepo.createBatchWithSnapshot(
+      {
+        productId,
+        sourceSpecId: body.sourceSpecId,
+        batchNo: body.batchNo,
+        productCode,
+        createdById: actor.userId,
+        assignedQcExecId: body.assignedQcExecId,
+        mfgDate: body.mfgDate,
+        expDate: body.expDate,
+        batchSize: body.batchSize,
+      },
+      specTests,
+      moaSections,
+      tx,
+    );
+
+    if (!created) {
+      throw AppError.fromCode("INTERNAL", "Batch creation failed");
+    }
+
+    await auditLog(
+      {
+        userId: actor.userId,
+        userName: actorUser?.fullName,
+        role: actor.role,
+        department: actorUser?.department?.name,
+        action: AuditAction.CREATE,
+        entityType: AuditEntityType.BATCH,
+        entityId: created.id,
+        docNo: created.arnNo ?? undefined,
+        comment: `SPEC ${created.sourceSpec.specNo}, assigned to ${assigneeName ?? body.assignedQcExecId}`,
+        ipAddress,
+      },
+      tx,
+    );
+
+    return created;
+  });
 
   await notify({
     recipients: { users: [body.assignedQcExecId] },
@@ -265,6 +311,7 @@ export async function submitBatch(batchId: string, actor: JwtAccessPayload, ipAd
 
 export async function approveBatch(
   batchId: string,
+  password: string,
   actor: JwtAccessPayload,
   ipAddress?: string,
 ) {
@@ -274,6 +321,7 @@ export async function approveBatch(
     entityId: batchId,
     action: "APPROVE",
     actor,
+    password,
     ipAddress,
   });
   return getBatchById(batchId, actor);

@@ -2,14 +2,13 @@
  * AWS instrument/reagent expiry checks and readings JSON helpers (Rev 2.3).
  *
  * readings JSON may include:
- * { variables?, sets?, text?, passFail?, oosAckComment?, instrumentExpiredAck?, reagentExpiredAck? }
+ * { variables?, sets?, text?, passFail?, instrumentExpiredAck?, reagentExpiredAck? }
  */
 export type AwsReadings = {
   variables?: Record<string, number>;
   sets?: Array<Record<string, number>>;
   text?: string;
   passFail?: "PASS" | "FAIL";
-  oosAckComment?: string;
   instrumentExpiredAck?: boolean;
   reagentExpiredAck?: boolean;
 };
@@ -43,11 +42,6 @@ export function isReagentExpired(reagent: ReagentLike, today = startOfUtcDay()):
   return expiry < today;
 }
 
-export function hasOosAcknowledgement(readings: unknown): boolean {
-  const parsed = parseReadings(readings);
-  return Boolean(parsed.oosAckComment?.trim());
-}
-
 export function hasInstrumentExpiryAck(readings: unknown): boolean {
   return parseReadings(readings).instrumentExpiredAck === true;
 }
@@ -72,16 +66,11 @@ export function acknowledgeReagentExpired(readings: unknown, comment: string): A
   } as AwsReadings & { reagentExpiredAckComment?: string };
 }
 
-export function acknowledgeOos(readings: unknown, comment: string): AwsReadings {
-  return { ...parseReadings(readings), oosAckComment: comment };
-}
-
 export function clearExpiryAcks(readings: unknown): AwsReadings {
   const parsed = parseReadings(readings);
   return {
     ...parsed,
     instrumentExpiredAck: false,
     reagentExpiredAck: false,
-    oosAckComment: undefined,
   };
 }

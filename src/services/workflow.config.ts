@@ -1,8 +1,8 @@
 import { DocType, Role } from "@prisma/client";
 
-export type WorkflowEntityType = "STANDING_SPEC" | "BATCH" | "AWS_DOCUMENT";
+export type WorkflowEntityType = "STANDING_SPEC" | "BATCH" | "AWS_DOCUMENT" | "COA_DOCUMENT";
 
-export type WorkflowAction = "SUBMIT" | "APPROVE" | "SIGN" | "REJECT";
+export type WorkflowAction = "SUBMIT" | "APPROVE" | "SIGN" | "REJECT" | "SIGN_ISSUE";
 
 export type WorkflowStatus =
   | "DRAFT"
@@ -12,7 +12,9 @@ export type WorkflowStatus =
   | "SUPERSEDED"
   | "PENDING_APPROVAL"
   | "APPROVED"
-  | "RELEASED";
+  | "RELEASED"
+  | "AUTO_GENERATED"
+  | "ISSUED";
 
 export type TransitionRule = {
   fromStatus: WorkflowStatus;
@@ -43,10 +45,21 @@ export const AWS_DOCUMENT_TRANSITIONS: TransitionRule[] = [
   { fromStatus: "QC_APPROVED", action: "REJECT", toStatus: "DRAFT", requiredRole: Role.QA_MGR },
 ];
 
+/** US-13-7 / Dev Bible §5.3 — COA sign-and-issue releases batch. */
+export const COA_DOCUMENT_TRANSITIONS: TransitionRule[] = [
+  {
+    fromStatus: "AUTO_GENERATED",
+    action: "SIGN_ISSUE",
+    toStatus: "ISSUED",
+    requiredRole: Role.QA_MGR,
+  },
+];
+
 const TRANSITIONS_BY_ENTITY: Record<WorkflowEntityType, TransitionRule[]> = {
   STANDING_SPEC: STANDING_SPEC_TRANSITIONS,
   BATCH: BATCH_TRANSITIONS,
   AWS_DOCUMENT: AWS_DOCUMENT_TRANSITIONS,
+  COA_DOCUMENT: COA_DOCUMENT_TRANSITIONS,
 };
 
 export function findTransitionRule(
@@ -71,5 +84,6 @@ export type WorkflowEntityMeta = {
 
 export function resolveWorkflowEntityType(docType: DocType): WorkflowEntityType | null {
   if (docType === DocType.AWS) return "AWS_DOCUMENT";
+  if (docType === DocType.COA) return "COA_DOCUMENT";
   return null;
 }

@@ -33,14 +33,22 @@ export type AwsSectionListItemDto = {
   resultDisplay: string | null;
   conclusion: Conclusion | null;
   isOos: boolean;
+  oosAcknowledged: boolean;
+  oosAckComment: string | null;
   instrumentId: string | null;
   instrumentExpired: boolean;
+  instrumentExpiredAck: boolean;
+  instrumentExpiredAckComment: string | null;
   reagentId: string | null;
   reagentExpired: boolean;
+  reagentExpiredAck: boolean;
+  reagentExpiredAckComment: string | null;
   analystId: string | null;
   analyst: UserRefDto;
   checkerId: string | null;
   checker: UserRefDto;
+  /** Advisory UI hints — enforcement remains in aws-guards (Epic 12 / US-12-x). */
+  allowedActions: string[];
 };
 
 export type AwsSectionDetailDto = AwsSectionListItemDto & {
@@ -49,7 +57,6 @@ export type AwsSectionDetailDto = AwsSectionListItemDto & {
   awsDocNo: string;
   awsDocStatus: string;
   assignedQcExecId: string | null;
-  allowedActions: string[];
 };
 
 export type AwsSectionStatusSummary = {

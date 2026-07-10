@@ -1,4 +1,4 @@
-﻿-- CreateEnum
+-- CreateEnum
 CREATE TYPE "Role" AS ENUM ('SADMIN', 'QC_EXEC', 'QC_MGR', 'QA_EXEC', 'QA_MGR', 'MKT_EXEC');
 
 -- CreateEnum
@@ -192,6 +192,12 @@ CREATE TABLE "moa_doc_sections" (
     "sample_preparation" TEXT,
     "standard_preparation" TEXT,
     "blank_preparation" TEXT,
+    "reagent_preparation" TEXT,
+    "instrument_parameters" TEXT,
+    "system_suitability" TEXT,
+    "sequence_table" TEXT,
+    "procedure_text" TEXT,
+    "formula_reference" TEXT,
     "conclusion_template" TEXT,
     "additional_notes" TEXT,
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -431,6 +437,9 @@ CREATE INDEX "product_master_fields_product_master_id_idx" ON "product_master_fi
 
 -- CreateIndex
 CREATE UNIQUE INDEX "moa_docs_spec_id_key" ON "moa_docs"("spec_id");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "spec_tests_spec_id_sort_order_key" ON "spec_tests"("spec_id", "sort_order");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "batches_batch_no_key" ON "batches"("batch_no");

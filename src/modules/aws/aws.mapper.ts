@@ -4,6 +4,8 @@ import {
   parseReadings,
   startOfUtcDay,
 } from "../../services/aws-expiry.service";
+import { JwtAccessPayload } from "../../types/auth.types";
+import { getAllowedAwsSectionActions } from "./aws-allowed-actions";
 import { AwsSectionDetail } from "./aws.repository";
 import {
   AwsSectionDetailDto,
@@ -49,8 +51,27 @@ function computeInstrumentExpired(section: AwsSectionDetail): boolean {
   return isInstrumentExpired(section.instrument, startOfUtcDay());
 }
 
-export function toAwsSectionListItem(section: AwsSectionDetail): AwsSectionListItemDto {
+function expiryAckFields(readings: unknown) {
+  const parsed = parseReadings(readings) as {
+    instrumentExpiredAck?: boolean;
+    instrumentExpiredAckComment?: string;
+    reagentExpiredAck?: boolean;
+    reagentExpiredAckComment?: string;
+  };
+  return {
+    instrumentExpiredAck: parsed.instrumentExpiredAck === true,
+    instrumentExpiredAckComment: parsed.instrumentExpiredAckComment ?? null,
+    reagentExpiredAck: parsed.reagentExpiredAck === true,
+    reagentExpiredAckComment: parsed.reagentExpiredAckComment ?? null,
+  };
+}
+
+export function toAwsSectionListItem(
+  section: AwsSectionDetail,
+  allowedActions: string[] = [],
+): AwsSectionListItemDto {
   const limits = toResolvedLimits(section);
+  const acks = expiryAckFields(section.readings);
   return {
     id: section.id,
     batchDocumentId: section.batchDocumentId,
@@ -65,10 +86,16 @@ export function toAwsSectionListItem(section: AwsSectionDetail): AwsSectionListI
     resultDisplay: section.resultDisplay,
     conclusion: section.conclusion,
     isOos: section.isOos,
+    oosAcknowledged: section.oosAcknowledged,
+    oosAckComment: section.oosAckComment,
     instrumentId: section.instrumentId,
     instrumentExpired: computeInstrumentExpired(section),
+    instrumentExpiredAck: acks.instrumentExpiredAck,
+    instrumentExpiredAckComment: acks.instrumentExpiredAckComment,
     reagentId: section.reagentId,
     reagentExpired: computeReagentExpired(section),
+    reagentExpiredAck: acks.reagentExpiredAck,
+    reagentExpiredAckComment: acks.reagentExpiredAckComment,
     analystId: section.analystId,
     analyst: section.analyst
       ? { id: section.analyst.id, fullName: section.analyst.fullName }
@@ -77,31 +104,34 @@ export function toAwsSectionListItem(section: AwsSectionDetail): AwsSectionListI
     checker: section.checker
       ? { id: section.checker.id, fullName: section.checker.fullName }
       : null,
+    allowedActions,
   };
 }
 
 export function toAwsSectionDetail(
   section: AwsSectionDetail,
-  allowedActions: string[] = [],
+  actor: JwtAccessPayload,
 ): AwsSectionDetailDto {
+  const allowedActions = getAllowedAwsSectionActions(section, actor);
   return {
-    ...toAwsSectionListItem(section),
+    ...toAwsSectionListItem(section, allowedActions),
     formula: toFormulaConfig(section),
     batchId: section.batchDocument.batchId,
     awsDocNo: section.batchDocument.docNo,
     awsDocStatus: section.batchDocument.status,
     assignedQcExecId: section.batchDocument.batch.assignedQcExecId,
-    allowedActions,
   };
 }
 
 export function toAwsSectionsListResponse(
   sections: AwsSectionDetail[],
+  actor: JwtAccessPayload,
 ): AwsSectionsListResponseDto {
   const summary = emptyStatusSummary();
   const mapped = sections.map((section) => {
     summary[section.status] += 1;
-    return toAwsSectionListItem(section);
+    const allowedActions = getAllowedAwsSectionActions(section, actor);
+    return toAwsSectionListItem(section, allowedActions);
   });
 
   return {

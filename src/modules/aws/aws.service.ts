@@ -5,6 +5,7 @@ import {
   ResultType,
   SectionStatus,
 } from "@prisma/client";
+import { prisma } from "../../lib/prisma-types";
 import { AppError } from "../../lib/app-error";
 import { JwtAccessPayload } from "../../types/auth.types";
 import { clearExpiryAcks, parseReadings } from "../../services/aws-expiry.service";
@@ -132,22 +133,28 @@ function recomputeSection(section: AwsSectionDetail, readings: unknown): Recompu
   };
 }
 
-export async function listAwsSections(awsDocId: string): Promise<AwsSectionsListResponseDto> {
+export async function listAwsSections(
+  awsDocId: string,
+  actor: JwtAccessPayload,
+): Promise<AwsSectionsListResponseDto> {
   const doc = await awsRepo.findAwsDocumentById(awsDocId);
   if (!doc || doc.docType !== DocType.AWS) {
     throw AppError.notFound("AWS document");
   }
 
   const sections = await awsRepo.findAwsSectionsByDocumentId(awsDocId);
-  return toAwsSectionsListResponse(sections);
+  return toAwsSectionsListResponse(sections, actor);
 }
 
-export async function getAwsSectionDetail(sectionId: string): Promise<AwsSectionDetailDto> {
+export async function getAwsSectionDetail(
+  sectionId: string,
+  actor: JwtAccessPayload,
+): Promise<AwsSectionDetailDto> {
   const section = await awsRepo.findAwsSectionById(sectionId);
   if (!section) {
     throw AppError.notFound("AWS section");
   }
-  return toAwsSectionDetail(section);
+  return toAwsSectionDetail(section, actor);
 }
 
 export async function patchAwsSection(
@@ -202,24 +209,42 @@ export async function patchAwsSection(
     }
   }
 
-  const updated = await awsRepo.updateAwsSection(sectionId, updateData);
+  const dataChanged =
+    body.readings !== undefined ||
+    body.instrumentId !== undefined ||
+    body.reagentId !== undefined;
 
-  const actorUser = await getUserById(actor.userId);
-  await auditLog({
-    userId: actor.userId,
-    userName: actorUser?.fullName,
-    role: actor.role,
-    department: actorUser?.department?.name,
-    action: AuditAction.UPDATE,
-    entityType: AuditEntityType.AWS,
-    entityId: updated.batchDocumentId,
-    docNo: updated.batchDocument.docNo,
-    fieldChanged: recompute.calculatedResult !== null ? "calculatedResult" : "readings",
-    comment: `Section ${updated.specDocumentTest.testName} data entry saved`,
-    ipAddress,
+  if (dataChanged || recompute.isOos !== section.isOos || !recompute.isOos) {
+    updateData.oosAcknowledged = false;
+    updateData.oosAcknowledgedAt = null;
+    updateData.oosAckComment = null;
+  }
+
+  const updated = await prisma.$transaction(async (tx) => {
+    const row = await awsRepo.updateAwsSection(sectionId, updateData, tx);
+
+    const actorUser = await getUserById(actor.userId);
+    await auditLog(
+      {
+        userId: actor.userId,
+        userName: actorUser?.fullName,
+        role: actor.role,
+        department: actorUser?.department?.name,
+        action: AuditAction.UPDATE,
+        entityType: AuditEntityType.AWS,
+        entityId: row.batchDocumentId,
+        docNo: row.batchDocument.docNo,
+        fieldChanged: recompute.calculatedResult !== null ? "calculatedResult" : "readings",
+        comment: `Section ${row.specDocumentTest.testName} data entry saved`,
+        ipAddress,
+      },
+      tx,
+    );
+
+    return row;
   });
 
-  return toAwsSectionDetail(updated);
+  return toAwsSectionDetail(updated, actor);
 }
 
 export async function previewAwsSection(

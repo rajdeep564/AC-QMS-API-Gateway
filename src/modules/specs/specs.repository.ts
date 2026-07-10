@@ -5,7 +5,10 @@ import {
   SpecVariant,
   StandingDocStatus,
 } from "@prisma/client";
+import { AppError } from "../../lib/app-error";
 import { Db, prisma } from "../../lib/prisma-types";
+import { AuditAction, AuditEntityType, type AuditInput, log as auditLog } from "../../services/audit.service";
+import { moaSectionContentFields } from "./specs.moa-mapper";
 
 export type SpecTestInput = {
   sortOrder: number;
@@ -28,6 +31,12 @@ export type MoaSectionInput = {
   samplePreparation?: string | null;
   standardPreparation?: string | null;
   blankPreparation?: string | null;
+  reagentPreparation?: string | null;
+  instrumentParameters?: string | null;
+  systemSuitability?: string | null;
+  sequenceTable?: string | null;
+  procedureText?: string | null;
+  formulaReference?: string | null;
   conclusionTemplate?: string | null;
   additionalNotes?: string | null;
 };
@@ -56,9 +65,16 @@ export async function findSpecWithDetails(specId: string, client: Db = prisma): 
   });
 }
 
-export async function listSpecsByProduct(productId: string, client: Db = prisma) {
+export async function listSpecsByProduct(
+  productId: string,
+  status?: StandingDocStatus,
+  client: Db = prisma,
+) {
   return client.spec.findMany({
-    where: { productId },
+    where: {
+      productId,
+      ...(status ? { status } : {}),
+    },
     orderBy: [{ revisionNo: "desc" }, { createdAt: "desc" }],
     include: {
       specTests: { select: { id: true }, take: 1 },
@@ -150,15 +166,29 @@ export type StandingSpecStatusUpdate = {
   effectiveDate?: Date | null;
 };
 
+export type StandingSpecStatusAuditContext = AuditInput & {
+  oldStatus: StandingDocStatus;
+};
+
+/**
+ * Lockstep invariant — the ONLY write path for specs.status / moa_docs.status (Epic 4 / US-4-3).
+ * Both records always receive the same status value in one call.
+ */
 export async function updateSpecAndMoaStatus(
   specId: string,
   data: StandingSpecStatusUpdate,
   client: Db = prisma,
+  audit?: StandingSpecStatusAuditContext,
 ) {
+  const pairedStatus = data.status;
+  if (pairedStatus === undefined || pairedStatus === null) {
+    throw AppError.validation("SPEC/MOA status update requires a paired status value");
+  }
+
   const spec = await client.spec.update({
     where: { id: specId },
     data: {
-      status: data.status,
+      status: pairedStatus,
       submittedById: data.submittedById,
       qcApprovedById: data.qcApprovedById,
       qaSignedById: data.qaSignedById,
@@ -168,23 +198,47 @@ export async function updateSpecAndMoaStatus(
     include: specDetailInclude,
   });
 
-  await client.moaDoc.update({
+  const moa = await client.moaDoc.update({
     where: { specId },
-    data: { status: data.status },
+    data: { status: pairedStatus },
   });
+
+  if (spec.status !== pairedStatus || moa.status !== pairedStatus) {
+    throw AppError.fromCode(
+      "INTERNAL",
+      "Lockstep invariant violated: SPEC and MOA status must be updated together to the same value",
+    );
+  }
+
+  if (audit) {
+    await auditLog(
+      {
+        ...audit,
+        action: audit.action,
+        entityType: audit.entityType ?? AuditEntityType.SPEC,
+        entityId: audit.entityId ?? specId,
+        fieldChanged: audit.fieldChanged ?? "status",
+        oldValue: audit.oldStatus,
+        newValue: pairedStatus,
+      },
+      client,
+    );
+  }
 
   return spec;
 }
 
-export async function supersedeSpecPair(specId: string, client: Db = prisma) {
-  await client.spec.update({
-    where: { id: specId },
-    data: { status: StandingDocStatus.SUPERSEDED },
-  });
-  await client.moaDoc.update({
-    where: { specId },
-    data: { status: StandingDocStatus.SUPERSEDED },
-  });
+export async function supersedeSpecPair(
+  specId: string,
+  client: Db = prisma,
+  audit?: StandingSpecStatusAuditContext,
+) {
+  await updateSpecAndMoaStatus(
+    specId,
+    { status: StandingDocStatus.SUPERSEDED },
+    client,
+    audit,
+  );
 }
 
 function mapTestCreate(tests: SpecTestInput[]) {
@@ -250,12 +304,7 @@ export async function createSpecWithMoaPair(
           }
           return {
             specTestId: testId,
-            pharmacopoeia: s.pharmacopoeia ?? null,
-            samplePreparation: s.samplePreparation ?? null,
-            standardPreparation: s.standardPreparation ?? null,
-            blankPreparation: s.blankPreparation ?? null,
-            conclusionTemplate: s.conclusionTemplate ?? null,
-            additionalNotes: s.additionalNotes ?? null,
+            ...moaSectionContentFields(s),
           };
         }),
       },
@@ -272,6 +321,7 @@ export async function replaceSpecContent(
   tests: SpecTestInput[],
   moaSections: MoaSectionInput[],
   client: Db = prisma,
+  audit?: AuditInput,
 ) {
   await client.moaDocSection.deleteMany({
     where: { moaDoc: { specId } },
@@ -301,15 +351,22 @@ export async function replaceSpecContent(
       return {
         moaDocId: moa.id,
         specTestId: testId,
-        pharmacopoeia: s.pharmacopoeia ?? null,
-        samplePreparation: s.samplePreparation ?? null,
-        standardPreparation: s.standardPreparation ?? null,
-        blankPreparation: s.blankPreparation ?? null,
-        conclusionTemplate: s.conclusionTemplate ?? null,
-        additionalNotes: s.additionalNotes ?? null,
+        ...moaSectionContentFields(s),
       };
     }),
   });
+
+  if (audit) {
+    await auditLog(
+      {
+        ...audit,
+        action: audit.action ?? AuditAction.UPDATE,
+        entityType: audit.entityType ?? AuditEntityType.SPEC,
+        entityId: audit.entityId ?? specId,
+      },
+      client,
+    );
+  }
 
   return findSpecWithDetails(specId, client);
 }
@@ -374,6 +431,12 @@ export async function copySpecRevision(
           samplePreparation: s.samplePreparation,
           standardPreparation: s.standardPreparation,
           blankPreparation: s.blankPreparation,
+          reagentPreparation: s.reagentPreparation,
+          instrumentParameters: s.instrumentParameters,
+          systemSuitability: s.systemSuitability,
+          sequenceTable: s.sequenceTable,
+          procedureText: s.procedureText,
+          formulaReference: s.formulaReference,
           conclusionTemplate: s.conclusionTemplate,
           additionalNotes: s.additionalNotes,
         })),

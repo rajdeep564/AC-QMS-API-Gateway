@@ -18,6 +18,11 @@
     "verify:session1": "tsx scripts/verify-session1.ts",
     "verify:session2": "tsx scripts/verify-session2.ts",
     "verify:session3": "tsx scripts/verify-session3.ts",
+    "verify:session3-phase-a": "tsx scripts/verify-session3-phase-a.ts",
+    "verify:session3-phase-b": "tsx scripts/verify-session3-phase-b.ts",
+    "verify:session3-phase-c": "tsx scripts/verify-session3-phase-c.ts",
+    "verify:users": "tsx scripts/verify-users-list.ts",
+    "verify:p2c": "tsx scripts/verify-p2c-backend-prep.ts",
     "verify:audit-tx-s3": "tsx scripts/verify-audit-tx-s3.ts"
   },
   "prisma": {
