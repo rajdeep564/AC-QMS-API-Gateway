@@ -1,10 +1,10 @@
 import { z } from "zod";
+import { MIN_EXPIRY_ACK_COMMENT_LENGTH, MIN_OOS_ACK_COMMENT_LENGTH } from "./aws.constants";
 
 const qualitativeReadingsSchema = z
   .object({
     text: z.string().optional(),
     passFail: z.enum(["PASS", "FAIL"]).optional(),
-    oosAckComment: z.string().optional(),
     instrumentExpiredAck: z.boolean().optional(),
     reagentExpiredAck: z.boolean().optional(),
   })
@@ -14,7 +14,6 @@ const quantitativeReadingsSchema = z
   .object({
     variables: z.record(z.number()).optional(),
     sets: z.array(z.record(z.number())).optional(),
-    oosAckComment: z.string().optional(),
     instrumentExpiredAck: z.boolean().optional(),
     reagentExpiredAck: z.boolean().optional(),
   })
@@ -41,13 +40,31 @@ export const acknowledgeExpiredBodySchema = z
     type: z.enum(["instrument", "reagent"]),
     comment: z.string().min(1),
   })
-  .strict();
+  .strict()
+  .superRefine((data, ctx) => {
+    if (data.comment.trim().length < MIN_EXPIRY_ACK_COMMENT_LENGTH) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Expiry acknowledgement comment must be at least ${MIN_EXPIRY_ACK_COMMENT_LENGTH} characters`,
+        path: ["comment"],
+      });
+    }
+  });
 
 export const acknowledgeOosBodySchema = z
   .object({
     comment: z.string().min(1),
   })
-  .strict();
+  .strict()
+  .superRefine((data, ctx) => {
+    if (data.comment.trim().length < MIN_OOS_ACK_COMMENT_LENGTH) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `OOS acknowledgement comment must be at least ${MIN_OOS_ACK_COMMENT_LENGTH} characters`,
+        path: ["comment"],
+      });
+    }
+  });
 
 export const rejectCheckBodySchema = z
   .object({

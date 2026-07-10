@@ -3,7 +3,11 @@ import { Router } from "express";
 import { requireAuth } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
 import { validate } from "../../middleware/validate";
-import { rejectBodySchema, transitionBodySchema } from "../masters/masters.schema";
+import {
+  rejectBodySchema,
+  submitDocumentBodySchema,
+  transitionBodySchema,
+} from "../masters/masters.schema";
 import { approve, getById, reject, sign, signAndIssue, submit } from "./documents.controller";
 
 const router = Router();
@@ -13,7 +17,7 @@ router.post(
   "/:id/submit",
   requireAuth,
   requireRole(Role.QC_EXEC),
-  validate(transitionBodySchema),
+  validate(submitDocumentBodySchema),
   submit,
 );
 router.post(

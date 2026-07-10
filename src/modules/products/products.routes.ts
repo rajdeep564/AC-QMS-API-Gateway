@@ -6,7 +6,7 @@ import { validate } from "../../middleware/validate";
 import { create as createMaster } from "../masters/masters.controller";
 import { createMasterBodySchema } from "../masters/masters.schema";
 import { create as createSpec, listForProduct as listSpecs } from "../specs/specs.controller";
-import { createSpecBodySchema } from "../specs/specs.schema";
+import { createSpecBodySchema, listSpecsQuerySchema } from "../specs/specs.schema";
 import { create as createBatch, createBatchBodySchema } from "../batches/batches.routes";
 import { create, getById, list, listMasters } from "./products.controller";
 import { createProductBodySchema, listProductsQuerySchema } from "./products.schema";
@@ -24,7 +24,7 @@ router.post(
   validate(createMasterBodySchema),
   createMaster,
 );
-router.get("/:id/specs", requireAuth, listSpecs);
+router.get("/:id/specs", requireAuth, validate(listSpecsQuerySchema, "query"), listSpecs);
 router.post(
   "/:productId/specs",
   requireAuth,

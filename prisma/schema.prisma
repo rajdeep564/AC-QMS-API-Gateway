@@ -309,6 +309,7 @@ model SpecTest {
   moaDocSections    MoaDocSection[]
   specDocumentTests SpecDocumentTest[]
 
+  @@unique([specId, sortOrder])
   @@map("spec_tests")
 }
 
@@ -327,16 +328,22 @@ model MoaDoc {
 }
 
 model MoaDocSection {
-  id                  String   @id @default(uuid()) @db.Uuid
-  moaDocId            String   @map("moa_doc_id") @db.Uuid
-  specTestId          String   @map("spec_test_id") @db.Uuid
-  pharmacopoeia       String?  @db.VarChar(50)
-  samplePreparation   String?  @map("sample_preparation")
-  standardPreparation String?  @map("standard_preparation")
-  blankPreparation    String?  @map("blank_preparation")
-  conclusionTemplate  String?  @map("conclusion_template")
-  additionalNotes     String?  @map("additional_notes")
-  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz
+  id                   String   @id @default(uuid()) @db.Uuid
+  moaDocId             String   @map("moa_doc_id") @db.Uuid
+  specTestId           String   @map("spec_test_id") @db.Uuid
+  pharmacopoeia        String?  @db.VarChar(50)
+  samplePreparation    String?  @map("sample_preparation")
+  standardPreparation  String?  @map("standard_preparation")
+  blankPreparation     String?  @map("blank_preparation")
+  reagentPreparation   String?  @map("reagent_preparation")
+  instrumentParameters String?  @map("instrument_parameters")
+  systemSuitability    String?  @map("system_suitability")
+  sequenceTable        String?  @map("sequence_table")
+  procedureText        String?  @map("procedure_text")
+  formulaReference     String?  @map("formula_reference")
+  conclusionTemplate   String?  @map("conclusion_template")
+  additionalNotes      String?  @map("additional_notes")
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   moaDoc              MoaDoc               @relation(fields: [moaDocId], references: [id])
   specTest            SpecTest             @relation(fields: [specTestId], references: [id])
@@ -362,6 +369,7 @@ model Batch {
   batchSize        String?     @map("batch_size") @db.VarChar(60)
   createdById      String      @map("created_by") @db.Uuid
   approvedById     String?     @map("approved_by") @db.Uuid
+  releasedAt       DateTime?   @map("released_at") @db.Timestamptz
   createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz
 
   product        Product              @relation(fields: [productId], references: [id])
@@ -452,6 +460,9 @@ model AwsSection {
   resultDisplay      String?       @map("result_display") @db.VarChar(120)
   conclusion         Conclusion?
   isOos              Boolean       @default(false) @map("is_oos")
+  oosAcknowledged    Boolean       @default(false) @map("oos_acknowledged")
+  oosAcknowledgedAt  DateTime?     @map("oos_acknowledged_at") @db.Timestamptz
+  oosAckComment      String?       @map("oos_ack_comment")
   analystId          String?       @map("analyst_id") @db.Uuid
   checkerId          String?       @map("checker_id") @db.Uuid
   instrumentId       String?       @map("instrument_id") @db.Uuid

@@ -4,8 +4,10 @@ import jwt, { SignOptions } from "jsonwebtoken";
 import { User, UserStatus } from "@prisma/client";
 import { LOCKOUT_MINUTES, LOCKOUT_THRESHOLD } from "../../config/constants";
 import { config } from "../../config/env";
+import { prisma } from "../../lib/prisma-types";
 import { AppError } from "../../lib/app-error";
 import { JwtAccessPayload, JwtRefreshPayload } from "../../types/auth.types";
+import { AuditAction, AuditEntityType, log as auditLog } from "../../services/audit.service";
 import { AuthUserDto } from "./auth.types";
 import { getRefreshExpiryDate } from "./auth.constants";
 import * as authRepo from "./auth.repository";
@@ -164,6 +166,30 @@ export async function changeUserPassword(userId: string, newPassword: string): P
   });
 }
 
+export async function logoutUser(
+  userId: string,
+  sessionId?: string,
+  ipAddress?: string,
+): Promise<void> {
+  if (sessionId) {
+    await revokeSession(sessionId);
+  }
+
+  const user = await getUserById(userId);
+  if (user) {
+    await auditLog({
+      userId: user.id,
+      userName: user.fullName,
+      role: user.role,
+      department: user.department?.name,
+      action: AuditAction.LOGOUT,
+      entityType: AuditEntityType.USER,
+      entityId: user.id,
+      ipAddress,
+    });
+  }
+}
+
 export async function loginUser(
   username: string,
   password: string,
@@ -192,6 +218,17 @@ export async function loginUser(
   const { refreshToken } = await createSession(user.id, meta);
   await handleLoginAttempt(user.id, true);
 
+  await auditLog({
+    userId: user.id,
+    userName: user.fullName,
+    role: user.role,
+    department: user.department?.name,
+    action: AuditAction.LOGIN,
+    entityType: AuditEntityType.USER,
+    entityId: user.id,
+    ipAddress: meta.ipAddress,
+  });
+
   return { accessToken, refreshToken, user };
 }
 
@@ -212,6 +249,7 @@ export async function changePasswordForUser(
   userId: string,
   currentPassword: string,
   newPassword: string,
+  ipAddress?: string,
 ): Promise<void> {
   const user = await getUserById(userId);
 
@@ -224,7 +262,33 @@ export async function changePasswordForUser(
     throw AppError.fromCode("PASSWORD_MISMATCH", "Invalid current password");
   }
 
-  await changeUserPassword(userId, newPassword);
+  const passwordHash = await hashPassword(newPassword);
+
+  await prisma.$transaction(async (tx) => {
+    await authRepo.updateUser(
+      userId,
+      {
+        passwordHash,
+        forcePwdChange: false,
+      },
+      tx,
+    );
+
+    await auditLog(
+      {
+        userId: user.id,
+        userName: user.fullName,
+        role: user.role,
+        department: user.department?.name,
+        action: AuditAction.UPDATE,
+        entityType: AuditEntityType.USER,
+        entityId: user.id,
+        fieldChanged: "password",
+        ipAddress,
+      },
+      tx,
+    );
+  });
 }
 
 export function getDepartmentName(user: { department?: { name: string } | null }): string | undefined {

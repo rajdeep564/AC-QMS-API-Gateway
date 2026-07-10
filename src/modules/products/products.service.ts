@@ -1,6 +1,9 @@
 import { Prisma, Product } from "@prisma/client";
+import { prisma } from "../../lib/prisma-types";
 import { AppError } from "../../lib/app-error";
+import { AuditAction, AuditEntityType, log as auditLog } from "../../services/audit.service";
 import { parsePagination } from "../../utils/pagination";
+import { getUserById } from "../auth/auth.service";
 import { CreateProductBody, ListProductsQuery } from "./products.schema";
 import { ProductDto, ProductMasterSummaryDto } from "./products.types";
 import * as productsRepo from "./products.repository";
@@ -35,8 +38,31 @@ export async function listProducts(query: ListProductsQuery) {
   };
 }
 
-export async function createProduct(body: CreateProductBody): Promise<ProductDto> {
-  const product = await productsRepo.createProduct({ name: body.name });
+export async function createProduct(
+  body: CreateProductBody,
+  actor: { userId: string; role: string },
+  ipAddress?: string,
+): Promise<ProductDto> {
+  const actorUser = await getUserById(actor.userId);
+
+  const product = await prisma.$transaction(async (tx) => {
+    const created = await productsRepo.createProduct({ name: body.name }, tx);
+    await auditLog(
+      {
+        userId: actor.userId,
+        userName: actorUser?.fullName,
+        role: actor.role,
+        department: actorUser?.department?.name,
+        action: AuditAction.CREATE,
+        entityType: AuditEntityType.PRODUCT,
+        entityId: created.id,
+        ipAddress,
+      },
+      tx,
+    );
+    return created;
+  });
+
   return toProductDto(product);
 }
 

@@ -1,7 +1,7 @@
 import { BatchStatus, CoaComplianceVerdict, DocStatus, DocType } from "@prisma/client";
 import { WorkflowAction } from "../../services/workflow.config";
 
-export type DocumentAllowedAction = WorkflowAction | "SIGN_ISSUE";
+export type DocumentAllowedAction = WorkflowAction;
 
 export type CoaResultDto = {
   testName: string;

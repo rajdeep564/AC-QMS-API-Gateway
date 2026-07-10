@@ -116,6 +116,8 @@ export async function createMaster(
 
   let supersededIds: string[] = [];
 
+  const actorUser = await getUserById(actor.userId);
+
   const master = await prisma.$transaction(async (tx) => {
     const created = await mastersRepo.createMasterWithFields(
       {
@@ -136,34 +138,56 @@ export async function createMaster(
       supersededIds = await mastersRepo.supersedeActiveMasters(productId, created.id, tx);
     }
 
+    await auditLog(
+      {
+        userId: actor.userId,
+        userName: actorUser?.fullName,
+        role: actor.role,
+        department: actorUser?.department?.name,
+        action: AuditAction.CREATE,
+        entityType: AuditEntityType.MASTER,
+        entityId: created.id,
+        ipAddress,
+      },
+      tx,
+    );
+
+    if (!isDirect && body.assignedTo) {
+      await auditLog(
+        {
+          userId: actor.userId,
+          userName: actorUser?.fullName,
+          role: actor.role,
+          department: actorUser?.department?.name,
+          action: AuditAction.ASSIGN,
+          entityType: AuditEntityType.MASTER,
+          entityId: created.id,
+          newValue: body.assignedTo,
+          ipAddress,
+        },
+        tx,
+      );
+    }
+
+    for (const supersededId of supersededIds) {
+      await auditLog(
+        {
+          userId: actor.userId,
+          userName: actorUser?.fullName,
+          role: actor.role,
+          action: AuditAction.SUPERSEDE,
+          entityType: AuditEntityType.MASTER,
+          entityId: supersededId,
+          ipAddress,
+        },
+        tx,
+      );
+    }
+
     return created;
   });
 
-  const actorUser = await getUserById(actor.userId);
-  await auditLog({
-    userId: actor.userId,
-    userName: actorUser?.fullName,
-    role: actor.role,
-    department: actorUser?.department?.name,
-    action: AuditAction.CREATE,
-    entityType: AuditEntityType.MASTER,
-    entityId: master.id,
-    ipAddress,
-  });
-
   if (!isDirect && body.assignedTo) {
-    await auditLog({
-      userId: actor.userId,
-      userName: actorUser?.fullName,
-      role: actor.role,
-      department: actorUser?.department?.name,
-      action: AuditAction.ASSIGN,
-      entityType: AuditEntityType.MASTER,
-      entityId: master.id,
-      newValue: body.assignedTo,
-      ipAddress,
-    });
-
     await notify({
       recipients: { users: [body.assignedTo] },
       type: "MASTER_ASSIGNED",
@@ -171,18 +195,6 @@ export async function createMaster(
       message: `You have been assigned to complete Product Master revision ${revisionNo}.`,
       link: masterLink(master.id),
       excludeUserId: actor.userId,
-    });
-  }
-
-  for (const supersededId of supersededIds) {
-    await auditLog({
-      userId: actor.userId,
-      userName: actorUser?.fullName,
-      role: actor.role,
-      action: AuditAction.SUPERSEDE,
-      entityType: AuditEntityType.MASTER,
-      entityId: supersededId,
-      ipAddress,
     });
   }
 
@@ -214,19 +226,25 @@ export async function patchMasterFields(
   assertCanEditFields(master, actor);
   validateRequiredFields(body.fields);
 
-  const updated = await mastersRepo.replaceMasterFields(masterId, body.fields);
-
   const actorUser = await getUserById(actor.userId);
-  await auditLog({
-    userId: actor.userId,
-    userName: actorUser?.fullName,
-    role: actor.role,
-    department: actorUser?.department?.name,
-    action: AuditAction.UPDATE,
-    entityType: AuditEntityType.MASTER,
-    entityId: masterId,
-    fieldChanged: "fields",
-    ipAddress,
+
+  const updated = await prisma.$transaction(async (tx) => {
+    const result = await mastersRepo.replaceMasterFields(masterId, body.fields, tx);
+    await auditLog(
+      {
+        userId: actor.userId,
+        userName: actorUser?.fullName,
+        role: actor.role,
+        department: actorUser?.department?.name,
+        action: AuditAction.UPDATE,
+        entityType: AuditEntityType.MASTER,
+        entityId: masterId,
+        fieldChanged: "fields",
+        ipAddress,
+      },
+      tx,
+    );
+    return result;
   });
 
   return toMasterDetail(updated!, actor);
@@ -255,12 +273,13 @@ export async function approveMaster(
   validateRequiredFields(master.fields);
 
   const now = new Date();
+  const actorUser = await getUserById(actor.userId);
 
   let supersededIds: string[] = [];
 
   const updated = await prisma.$transaction(async (tx) => {
     supersededIds = await mastersRepo.supersedeActiveMasters(master.productId, masterId, tx);
-    return mastersRepo.updateMaster(
+    const result = await mastersRepo.updateMaster(
       masterId,
       {
         status: MasterStatus.ACTIVE,
@@ -271,34 +290,41 @@ export async function approveMaster(
       },
       tx,
     );
-  });
 
-  const actorUser = await getUserById(actor.userId);
-  await auditLog({
-    userId: actor.userId,
-    userName: actorUser?.fullName,
-    role: actor.role,
-    department: actorUser?.department?.name,
-    action: AuditAction.APPROVE,
-    entityType: AuditEntityType.MASTER,
-    entityId: masterId,
-    fieldChanged: "status",
-    oldValue: MasterStatus.DRAFT,
-    newValue: MasterStatus.ACTIVE,
-    ipAddress,
-  });
+    await auditLog(
+      {
+        userId: actor.userId,
+        userName: actorUser?.fullName,
+        role: actor.role,
+        department: actorUser?.department?.name,
+        action: AuditAction.APPROVE,
+        entityType: AuditEntityType.MASTER,
+        entityId: masterId,
+        fieldChanged: "status",
+        oldValue: MasterStatus.DRAFT,
+        newValue: MasterStatus.ACTIVE,
+        ipAddress,
+      },
+      tx,
+    );
 
-  for (const supersededId of supersededIds) {
-    await auditLog({
-      userId: actor.userId,
-      userName: actorUser?.fullName,
-      role: actor.role,
-      action: AuditAction.SUPERSEDE,
-      entityType: AuditEntityType.MASTER,
-      entityId: supersededId,
-      ipAddress,
-    });
-  }
+    for (const supersededId of supersededIds) {
+      await auditLog(
+        {
+          userId: actor.userId,
+          userName: actorUser?.fullName,
+          role: actor.role,
+          action: AuditAction.SUPERSEDE,
+          entityType: AuditEntityType.MASTER,
+          entityId: supersededId,
+          ipAddress,
+        },
+        tx,
+      );
+    }
+
+    return result;
+  });
 
   return toMasterDetail(updated, actor);
 }
@@ -320,21 +346,33 @@ export async function rejectMaster(
     throw AppError.illegalTransition("Only DRAFT masters can be rejected");
   }
 
-  const updated = await mastersRepo.updateMaster(masterId, {
-    rejectionComment: body.comment,
-  });
-
   const actorUser = await getUserById(actor.userId);
-  await auditLog({
-    userId: actor.userId,
-    userName: actorUser?.fullName,
-    role: actor.role,
-    department: actorUser?.department?.name,
-    action: AuditAction.REJECT,
-    entityType: AuditEntityType.MASTER,
-    entityId: masterId,
-    comment: body.comment,
-    ipAddress,
+
+  const updated = await prisma.$transaction(async (tx) => {
+    const result = await mastersRepo.updateMaster(
+      masterId,
+      {
+        rejectionComment: body.comment,
+      },
+      tx,
+    );
+
+    await auditLog(
+      {
+        userId: actor.userId,
+        userName: actorUser?.fullName,
+        role: actor.role,
+        department: actorUser?.department?.name,
+        action: AuditAction.REJECT,
+        entityType: AuditEntityType.MASTER,
+        entityId: masterId,
+        comment: body.comment,
+        ipAddress,
+      },
+      tx,
+    );
+
+    return result;
   });
 
   if (master.assignedToId) {
@@ -373,21 +411,33 @@ export async function assignMaster(
     throw AppError.notFound("Assigned user");
   }
 
-  const updated = await mastersRepo.updateMaster(masterId, {
-    assignedTo: { connect: { id: body.assignedTo } },
-  });
-
   const actorUser = await getUserById(actor.userId);
-  await auditLog({
-    userId: actor.userId,
-    userName: actorUser?.fullName,
-    role: actor.role,
-    department: actorUser?.department?.name,
-    action: AuditAction.ASSIGN,
-    entityType: AuditEntityType.MASTER,
-    entityId: masterId,
-    newValue: body.assignedTo,
-    ipAddress,
+
+  const updated = await prisma.$transaction(async (tx) => {
+    const result = await mastersRepo.updateMaster(
+      masterId,
+      {
+        assignedTo: { connect: { id: body.assignedTo } },
+      },
+      tx,
+    );
+
+    await auditLog(
+      {
+        userId: actor.userId,
+        userName: actorUser?.fullName,
+        role: actor.role,
+        department: actorUser?.department?.name,
+        action: AuditAction.ASSIGN,
+        entityType: AuditEntityType.MASTER,
+        entityId: masterId,
+        newValue: body.assignedTo,
+        ipAddress,
+      },
+      tx,
+    );
+
+    return result;
   });
 
   await notify({

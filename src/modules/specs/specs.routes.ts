@@ -4,7 +4,7 @@ import { requireAuth } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
 import { validate } from "../../middleware/validate";
 import { rejectBodySchema, transitionBodySchema } from "../masters/masters.schema";
-import { patchSpecBodySchema } from "./specs.schema";
+import { patchSpecBodySchema, reviseSpecBodySchema } from "./specs.schema";
 import {
   approve,
   getById,
@@ -29,6 +29,6 @@ router.post(
   validate(rejectBodySchema),
   reject,
 );
-router.post("/:id/revise", requireAuth, requireRole(Role.QC_EXEC), revise);
+router.post("/:id/revise", requireAuth, requireRole(Role.QC_EXEC), validate(reviseSpecBodySchema), revise);
 
 export default router;

@@ -24,6 +24,12 @@ export type MoaSectionDto = {
   samplePreparation: string | null;
   standardPreparation: string | null;
   blankPreparation: string | null;
+  reagentPreparation: string | null;
+  instrumentParameters: string | null;
+  systemSuitability: string | null;
+  sequenceTable: string | null;
+  procedureText: string | null;
+  formulaReference: string | null;
   conclusionTemplate: string | null;
   additionalNotes: string | null;
 };

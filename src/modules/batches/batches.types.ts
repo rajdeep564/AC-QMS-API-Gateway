@@ -54,6 +54,7 @@ export interface BatchDto {
   createdById: string;
   approvedById: string | null;
   createdAt: Date;
+  releasedAt: Date | null;
 }
 
 export interface BatchListItemDto extends BatchDto {

@@ -1,17 +1,16 @@
 import { Prisma, SectionStatus } from "@prisma/client";
+import { prisma, type Tx } from "../../lib/prisma-types";
 import { AppError } from "../../lib/app-error";
 import { JwtAccessPayload } from "../../types/auth.types";
 import {
   acknowledgeInstrumentExpired,
-  acknowledgeOos,
   acknowledgeReagentExpired,
   isInstrumentExpired,
   isReagentExpired,
   startOfUtcDay,
 } from "../../services/aws-expiry.service";
 import { AuditAction, AuditEntityType, log as auditLog } from "../../services/audit.service";
-import { verifyUserPassword } from "../auth/auth.service";
-import { getUserById } from "../auth/auth.service";
+import { getUserById, verifyUserPassword } from "../auth/auth.service";
 import {
   assertAwaitingCheck,
   assertCompleteableStatus,
@@ -22,12 +21,10 @@ import {
   assertQcChecker,
   assertSectionAssignee,
   assertSectionHasConclusion,
+  validateExpiryAckComment,
+  validateOosAckComment,
 } from "./aws-guards";
-import {
-  AcknowledgeExpiredBody,
-  AcknowledgeOosBody,
-  RejectCheckBody,
-} from "./aws.schema";
+import { AcknowledgeExpiredBody, AcknowledgeOosBody, RejectCheckBody } from "./aws.schema";
 import { toAwsSectionDetail } from "./aws.mapper";
 import { AwsSectionDetailDto } from "./aws.types";
 import * as awsRepo from "./aws.repository";
@@ -38,21 +35,25 @@ async function auditSectionAction(
   actor: JwtAccessPayload,
   action: AuditAction,
   comment: string,
+  tx: Tx,
   ipAddress?: string,
 ): Promise<void> {
   const actorUser = await getUserById(actor.userId);
-  await auditLog({
-    userId: actor.userId,
-    userName: actorUser?.fullName,
-    role: actor.role,
-    department: actorUser?.department?.name,
-    action,
-    entityType: AuditEntityType.AWS,
-    entityId: section.batchDocumentId,
-    docNo: section.batchDocument.docNo,
-    comment: `${section.specDocumentTest.testName}: ${comment}`,
-    ipAddress,
-  });
+  await auditLog(
+    {
+      userId: actor.userId,
+      userName: actorUser?.fullName,
+      role: actor.role,
+      department: actorUser?.department?.name,
+      action,
+      entityType: AuditEntityType.AWS,
+      entityId: section.batchDocumentId,
+      docNo: section.batchDocument.docNo,
+      comment: `${section.specDocumentTest.testName}: ${comment}`,
+      ipAddress,
+    },
+    tx,
+  );
 }
 
 export async function acknowledgeExpiredSection(
@@ -66,6 +67,7 @@ export async function acknowledgeExpiredSection(
 
   assertEditableAwsDocument(section);
   assertSectionAssignee(section, actor);
+  validateExpiryAckComment(body.comment);
 
   const today = startOfUtcDay();
   const updateData: Prisma.AwsSectionUpdateInput = {};
@@ -88,18 +90,23 @@ export async function acknowledgeExpiredSection(
     updateData.readings = acknowledgeReagentExpired(section.readings, body.comment);
   }
 
-  const updated = await awsRepo.updateAwsSection(sectionId, updateData);
-  await auditSectionAction(
-    updated,
-    actor,
-    AuditAction.ACKNOWLEDGE_EXPIRED,
-    `${body.type} expired acknowledged: ${body.comment}`,
-    ipAddress,
-  );
+  const updated = await prisma.$transaction(async (tx) => {
+    const row = await awsRepo.updateAwsSection(sectionId, updateData, tx);
+    await auditSectionAction(
+      row,
+      actor,
+      AuditAction.ACKNOWLEDGE_EXPIRED,
+      `${body.type} expired acknowledged: ${body.comment}`,
+      tx,
+      ipAddress,
+    );
+    return row;
+  });
 
-  return toAwsSectionDetail(updated);
+  return toAwsSectionDetail(updated, actor);
 }
 
+/** US-12-12: OOS acknowledgement stored on dedicated columns with timestamp. */
 export async function acknowledgeOosSection(
   sectionId: string,
   body: AcknowledgeOosBody,
@@ -111,24 +118,28 @@ export async function acknowledgeOosSection(
 
   assertEditableAwsDocument(section);
   assertSectionAssignee(section, actor);
+  validateOosAckComment(body.comment);
 
   if (!section.isOos) {
     throw AppError.conflict("Section does not have an out-of-specification result");
   }
 
-  const updated = await awsRepo.updateAwsSection(sectionId, {
-    readings: acknowledgeOos(section.readings, body.comment),
+  const acknowledgedAt = new Date();
+  const updated = await prisma.$transaction(async (tx) => {
+    const row = await awsRepo.updateAwsSection(
+      sectionId,
+      {
+        oosAcknowledged: true,
+        oosAcknowledgedAt: acknowledgedAt,
+        oosAckComment: body.comment.trim(),
+      },
+      tx,
+    );
+    await auditSectionAction(row, actor, AuditAction.ACKNOWLEDGE_OOS, body.comment, tx, ipAddress);
+    return row;
   });
 
-  await auditSectionAction(
-    updated,
-    actor,
-    AuditAction.ACKNOWLEDGE_OOS,
-    body.comment,
-    ipAddress,
-  );
-
-  return toAwsSectionDetail(updated);
+  return toAwsSectionDetail(updated, actor);
 }
 
 export async function completeAwsSection(
@@ -146,14 +157,27 @@ export async function completeAwsSection(
   assertOosAcknowledged(section);
   await assertExpiryAcknowledged(section);
 
-  const updated = await awsRepo.updateAwsSection(sectionId, {
-    status: SectionStatus.AWAITING_CHECK,
-    analyst: { connect: { id: actor.userId } },
+  const updated = await prisma.$transaction(async (tx) => {
+    const row = await awsRepo.updateAwsSection(
+      sectionId,
+      {
+        status: SectionStatus.AWAITING_CHECK,
+        analyst: { connect: { id: actor.userId } },
+      },
+      tx,
+    );
+    await auditSectionAction(
+      row,
+      actor,
+      AuditAction.COMPLETE_SECTION,
+      "Analyst completed section",
+      tx,
+      ipAddress,
+    );
+    return row;
   });
 
-  await auditSectionAction(updated, actor, AuditAction.COMPLETE_SECTION, "Analyst completed section", ipAddress);
-
-  return toAwsSectionDetail(updated);
+  return toAwsSectionDetail(updated, actor);
 }
 
 export async function checkAwsSection(
@@ -171,14 +195,27 @@ export async function checkAwsSection(
   assertAwaitingCheck(section);
   await verifyUserPassword(actor.userId, body.password);
 
-  const updated = await awsRepo.updateAwsSection(sectionId, {
-    status: SectionStatus.COMPLETE,
-    checker: { connect: { id: actor.userId } },
+  const updated = await prisma.$transaction(async (tx) => {
+    const row = await awsRepo.updateAwsSection(
+      sectionId,
+      {
+        status: SectionStatus.COMPLETE,
+        checker: { connect: { id: actor.userId } },
+      },
+      tx,
+    );
+    await auditSectionAction(
+      row,
+      actor,
+      AuditAction.CHECK_SECTION,
+      "Checker verified section",
+      tx,
+      ipAddress,
+    );
+    return row;
   });
 
-  await auditSectionAction(updated, actor, AuditAction.CHECK_SECTION, "Checker verified section", ipAddress);
-
-  return toAwsSectionDetail(updated);
+  return toAwsSectionDetail(updated, actor);
 }
 
 export async function rejectCheckAwsSection(
@@ -195,13 +232,19 @@ export async function rejectCheckAwsSection(
   assertNotSameAsAnalyst(section, actor);
   assertAwaitingCheck(section);
 
-  const updated = await awsRepo.updateAwsSection(sectionId, {
-    status: SectionStatus.IN_PROGRESS,
-    analyst: { disconnect: true },
-    checker: { disconnect: true },
+  const updated = await prisma.$transaction(async (tx) => {
+    const row = await awsRepo.updateAwsSection(
+      sectionId,
+      {
+        status: SectionStatus.IN_PROGRESS,
+        analyst: { disconnect: true },
+        checker: { disconnect: true },
+      },
+      tx,
+    );
+    await auditSectionAction(row, actor, AuditAction.REJECT_CHECK, body.comment, tx, ipAddress);
+    return row;
   });
 
-  await auditSectionAction(updated, actor, AuditAction.REJECT_CHECK, body.comment, ipAddress);
-
-  return toAwsSectionDetail(updated);
+  return toAwsSectionDetail(updated, actor);
 }

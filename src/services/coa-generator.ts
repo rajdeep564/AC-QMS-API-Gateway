@@ -4,7 +4,6 @@ import {
   DeptName,
   ResultType,
   Role,
-  SectionStatus,
 } from "@prisma/client";
 import type { SpecDocumentTest } from "@prisma/client";
 import type { Tx } from "../lib/prisma-types";
@@ -91,12 +90,18 @@ export async function generateCoaPdf(_coaDocId: string): Promise<void> {
   // no-op until Epic 21
 }
 
+/** US-12-17 / US-13-1 — auto-generate COA from QA-signed AWS inside the AWS-sign transaction. */
 export async function generateCoaFromSignedAws(
   tx: Tx,
   batchId: string,
   signedAwsDocId: string,
   awsDocNo: string,
 ): Promise<void> {
+  const existing = await batchesRepo.findExistingCoaDocument(batchId, tx);
+  if (existing) {
+    return;
+  }
+
   const coaDoc = await batchesRepo.findPendingCoaDocument(batchId, tx);
   if (!coaDoc) {
     throw AppError.conflict("PENDING COA document not found for batch");
@@ -108,8 +113,6 @@ export async function generateCoaFromSignedAws(
   }
 
   const sections = await batchesRepo.findAwsSectionsForCoa(signedAwsDocId, tx);
-
-  await batchesRepo.deleteCoaResults(coaDoc.id, tx);
 
   const coaResultRows = sections.map((section, index) => {
     const specTest = section.specDocumentTest;
@@ -133,21 +136,24 @@ export async function generateCoaFromSignedAws(
     coaDoc.id,
     {
       complianceVerdict,
-      createdById: awsDoc.submittedById,
+      createdById: awsDoc.createdById,
       qcApprovedById: awsDoc.qcApprovedById,
-      qaSignedById: awsDoc.qaSignedById,
+      qaSignedById: null,
     },
     tx,
   );
 
-  await auditLog({
-    userName: "System",
-    action: AuditAction.GENERATE,
-    entityType: AuditEntityType.COA,
-    entityId: coaDoc.id,
-    docNo: coaDoc.docNo,
-    comment: `auto-generated from signed AWS ${awsDocNo}`,
-  });
+  await auditLog(
+    {
+      userName: "System",
+      action: AuditAction.GENERATE,
+      entityType: AuditEntityType.COA,
+      entityId: coaDoc.id,
+      docNo: coaDoc.docNo,
+      comment: `auto-generated from signed AWS ${awsDocNo}`,
+    },
+    tx,
+  );
 
   const qaDeptId = await findDepartmentIdByName(DeptName.QA, tx);
   const batch = await batchesRepo.findBatchById(batchId, tx);

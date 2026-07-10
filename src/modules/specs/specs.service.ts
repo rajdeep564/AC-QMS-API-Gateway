@@ -8,7 +8,8 @@ import { transition } from "../../services/workflow-engine";
 import { formatStandingMoaNo, formatStandingSpecNo } from "../../utils/standing-doc-number";
 import { getUserById } from "../auth/auth.service";
 import * as mastersRepo from "../masters/masters.repository";
-import { CreateSpecBody, PatchSpecBody } from "./specs.schema";
+import { assertRevisionChangeControlSeam } from "./specs.change-control";
+import { CreateSpecBody, ListSpecsQuery, PatchSpecBody, ReviseSpecBody } from "./specs.schema";
 import {
   MoaDocDto,
   MoaSectionDto,
@@ -17,6 +18,7 @@ import {
   SpecTestDto,
 } from "./specs.types";
 import * as specsRepo from "./specs.repository";
+import { validateSpecContentAtSave } from "./specs.validation";
 
 type SpecWithDetails = NonNullable<Awaited<ReturnType<typeof specsRepo.findSpecWithDetails>>>;
 
@@ -50,6 +52,12 @@ function toMoaSectionDto(section: NonNullable<SpecWithDetails["moaDoc"]>["sectio
     samplePreparation: section.samplePreparation,
     standardPreparation: section.standardPreparation,
     blankPreparation: section.blankPreparation,
+    reagentPreparation: section.reagentPreparation,
+    instrumentParameters: section.instrumentParameters,
+    systemSuitability: section.systemSuitability,
+    sequenceTable: section.sequenceTable,
+    procedureText: section.procedureText,
+    formulaReference: section.formulaReference,
     conclusionTemplate: section.conclusionTemplate,
     additionalNotes: section.additionalNotes,
   };
@@ -118,13 +126,26 @@ async function assertNoInFlightRevision(productId: string, variant: SpecVariant)
   }
 }
 
-export async function listSpecsForProduct(productId: string): Promise<SpecListItemDto[]> {
+async function buildActorAuditFields(actor: JwtAccessPayload) {
+  const actorUser = await getUserById(actor.userId);
+  return {
+    userId: actor.userId,
+    userName: actorUser?.fullName,
+    role: actor.role,
+    department: actorUser?.department?.name,
+  };
+}
+
+export async function listSpecsForProduct(
+  productId: string,
+  query: ListSpecsQuery = {},
+): Promise<SpecListItemDto[]> {
   const product = await mastersRepo.findProductById(productId);
   if (!product) {
     throw AppError.notFound("Product");
   }
 
-  const specs = await specsRepo.listSpecsByProduct(productId);
+  const specs = await specsRepo.listSpecsByProduct(productId, query.status);
   return specs.map((s) => ({
     id: s.id,
     productId: s.productId,
@@ -176,9 +197,11 @@ export async function createSpec(
   const productCode = await getProductCodeFromActiveMaster(productId);
   const specNo = body.specNo ?? formatStandingSpecNo(productCode, revisionNo);
   const moaNo = formatStandingMoaNo(productCode, revisionNo);
+  const normalizedTests = validateSpecContentAtSave(body.tests as specsRepo.SpecTestInput[]);
+  const auditFields = await buildActorAuditFields(actor);
 
   const spec = await prisma.$transaction(async (tx) => {
-    return specsRepo.createSpecWithMoaPair(
+    const created = await specsRepo.createSpecWithMoaPair(
       {
         productId,
         variant: body.variant,
@@ -187,24 +210,25 @@ export async function createSpec(
         revisionNo,
         createdById: actor.userId,
         effectiveDate: body.effectiveDate,
-        tests: body.tests as specsRepo.SpecTestInput[],
+        tests: normalizedTests,
         moaSections: body.moaSections,
       },
       tx,
     );
-  });
 
-  const actorUser = await getUserById(actor.userId);
-  await auditLog({
-    userId: actor.userId,
-    userName: actorUser?.fullName,
-    role: actor.role,
-    department: actorUser?.department?.name,
-    action: AuditAction.CREATE,
-    entityType: AuditEntityType.SPEC,
-    entityId: spec!.id,
-    docNo: specNo,
-    ipAddress,
+    await auditLog(
+      {
+        ...auditFields,
+        action: AuditAction.CREATE,
+        entityType: AuditEntityType.SPEC,
+        entityId: created!.id,
+        docNo: specNo,
+        ipAddress,
+      },
+      tx,
+    );
+
+    return created;
   });
 
   return toSpecDetail(spec!, actor);
@@ -237,31 +261,32 @@ export async function patchSpec(
     throw AppError.forbidden("Only the authoring QC Executive can edit this SPEC");
   }
 
-  const updated = await specsRepo.replaceSpecContent(
-    specId,
-    body.tests as specsRepo.SpecTestInput[],
-    body.moaSections,
-  );
+  const normalizedTests = validateSpecContentAtSave(body.tests as specsRepo.SpecTestInput[]);
+  const auditFields = await buildActorAuditFields(actor);
 
-  if (body.effectiveDate) {
-    await prisma.spec.update({
-      where: { id: specId },
-      data: { effectiveDate: body.effectiveDate },
-    });
-  }
+  const refreshed = await prisma.$transaction(async (tx) => {
+    await specsRepo.replaceSpecContent(
+      specId,
+      normalizedTests,
+      body.moaSections,
+      tx,
+      {
+        ...auditFields,
+        action: AuditAction.UPDATE,
+        entityType: AuditEntityType.SPEC,
+        entityId: specId,
+        ipAddress,
+      },
+    );
 
-  const refreshed = await specsRepo.findSpecWithDetails(specId);
+    if (body.effectiveDate) {
+      await tx.spec.update({
+        where: { id: specId },
+        data: { effectiveDate: body.effectiveDate },
+      });
+    }
 
-  const actorUser = await getUserById(actor.userId);
-  await auditLog({
-    userId: actor.userId,
-    userName: actorUser?.fullName,
-    role: actor.role,
-    department: actorUser?.department?.name,
-    action: AuditAction.UPDATE,
-    entityType: AuditEntityType.SPEC,
-    entityId: specId,
-    ipAddress,
+    return specsRepo.findSpecWithDetails(specId, tx);
   });
 
   return toSpecDetail(refreshed!, actor);
@@ -337,10 +362,13 @@ export async function reviseSpec(
   specId: string,
   actor: JwtAccessPayload,
   ipAddress?: string,
+  body: ReviseSpecBody = {},
 ): Promise<SpecDetailDto> {
   if (actor.role !== Role.QC_EXEC) {
     throw AppError.forbidden("Only QC Executive can revise a standing SPEC");
   }
+
+  assertRevisionChangeControlSeam(body.changeControlId);
 
   const source = await specsRepo.findSpecWithDetails(specId);
   if (!source) {
@@ -357,23 +385,25 @@ export async function reviseSpec(
   const newRevisionNo = source.revisionNo + 1;
   const specNo = formatStandingSpecNo(productCode, newRevisionNo);
   const moaNo = formatStandingMoaNo(productCode, newRevisionNo);
+  const auditFields = await buildActorAuditFields(actor);
 
   const newSpec = await prisma.$transaction(async (tx) => {
-    return specsRepo.copySpecRevision(source.id, actor.userId, specNo, moaNo, tx);
-  });
+    const created = await specsRepo.copySpecRevision(source.id, actor.userId, specNo, moaNo, tx);
 
-  const actorUser = await getUserById(actor.userId);
-  await auditLog({
-    userId: actor.userId,
-    userName: actorUser?.fullName,
-    role: actor.role,
-    department: actorUser?.department?.name,
-    action: AuditAction.REVISE,
-    entityType: AuditEntityType.SPEC,
-    entityId: newSpec!.id,
-    docNo: specNo,
-    oldValue: source.id,
-    ipAddress,
+    await auditLog(
+      {
+        ...auditFields,
+        action: AuditAction.REVISE,
+        entityType: AuditEntityType.SPEC,
+        entityId: created!.id,
+        docNo: specNo,
+        oldValue: source.id,
+        ipAddress,
+      },
+      tx,
+    );
+
+    return created;
   });
 
   return toSpecDetail(newSpec!, actor);

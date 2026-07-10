@@ -1,5 +1,9 @@
-import { Operator, ResultType, SpecVariant } from "@prisma/client";
+import { Operator, ResultType, SpecVariant, StandingDocStatus } from "@prisma/client";
 import { z } from "zod";
+
+export const listSpecsQuerySchema = z.object({
+  status: z.nativeEnum(StandingDocStatus).optional(),
+});
 
 export const specTestSchema = z.object({
   sortOrder: z.number().int(),
@@ -22,6 +26,12 @@ export const moaSectionSchema = z.object({
   samplePreparation: z.string().nullable().optional(),
   standardPreparation: z.string().nullable().optional(),
   blankPreparation: z.string().nullable().optional(),
+  reagentPreparation: z.string().nullable().optional(),
+  instrumentParameters: z.string().nullable().optional(),
+  systemSuitability: z.string().nullable().optional(),
+  sequenceTable: z.string().nullable().optional(),
+  procedureText: z.string().nullable().optional(),
+  formulaReference: z.string().nullable().optional(),
   conclusionTemplate: z.string().nullable().optional(),
   additionalNotes: z.string().nullable().optional(),
 });
@@ -67,3 +77,12 @@ export const patchSpecBodySchema = z
 
 export type CreateSpecBody = z.infer<typeof createSpecBodySchema>;
 export type PatchSpecBody = z.infer<typeof patchSpecBodySchema>;
+export type ListSpecsQuery = z.infer<typeof listSpecsQuerySchema>;
+
+export const reviseSpecBodySchema = z
+  .object({
+    changeControlId: z.string().uuid().optional(),
+  })
+  .default({});
+
+export type ReviseSpecBody = z.infer<typeof reviseSpecBodySchema>;

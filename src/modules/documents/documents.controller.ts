@@ -2,7 +2,7 @@ import { Response } from "express";
 import { asyncHandler } from "../../lib/async-handler";
 import { ok } from "../../lib/api-response";
 import type { AuthenticatedRequest } from "../../types/authenticated-request";
-import type { RejectBody, TransitionBody } from "../masters/masters.schema";
+import type { RejectBody, SubmitDocumentBody, TransitionBody } from "../masters/masters.schema";
 import {
   getDocumentDetail,
   signAndIssueCoa,
@@ -16,7 +16,7 @@ export const getById = asyncHandler(async (req: AuthenticatedRequest, res: Respo
 });
 
 export const submit = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-  const body = req.body as TransitionBody;
+  const body = req.body as SubmitDocumentBody;
   const { id } = req.params;
   const updated = await transitionDocument(id, "SUBMIT", req.user, body.password, req.ip);
   res.json(ok(updated));

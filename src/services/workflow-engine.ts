@@ -2,6 +2,7 @@ import {
   BatchStatus,
   DeptName,
   DocStatus,
+  DocType,
   Role,
   SpecVariant,
   StandingDocStatus,
@@ -11,9 +12,10 @@ import { AppError } from "../lib/app-error";
 import { JwtAccessPayload } from "../types/auth.types";
 import { getUserById, verifyUserPassword } from "../modules/auth/auth.service";
 import * as batchesRepo from "../modules/batches/batches.repository";
-import { findDepartmentIdByName } from "../modules/notifications/notifications.repository";
+import { findDepartmentIdByName, resolveRecipients } from "../modules/notifications/notifications.repository";
 import * as specsRepo from "../modules/specs/specs.repository";
 import { openAwsForBatch } from "./aws-open.service";
+import { enforceCoaSignIssueGuards } from "./coa-guards";
 import { AuditAction, AuditEntityType, log as auditLog } from "./audit.service";
 import { generateCoaFromSignedAws } from "./coa-generator";
 import { notify } from "./notification.service";
@@ -71,8 +73,22 @@ type AwsDocumentRecord = {
   assignedQcExecId: string | null;
 };
 
+type CoaDocumentRecord = {
+  id: string;
+  status: WorkflowStatus;
+  docNo: string;
+  batchId: string;
+  batchNo: string;
+  batchArnNo: string | null;
+  batchStatus: BatchStatus;
+  batchCreatedById: string | null;
+  batchAssignedQcExecId: string | null;
+  awsQcApprovedById: string | null;
+};
+
 function requiresPassword(entityType: WorkflowEntityType, action: WorkflowAction): boolean {
-  if (entityType === "BATCH") return false;
+  if (entityType === "BATCH") return action === "APPROVE";
+  if (entityType === "COA_DOCUMENT") return action === "SIGN_ISSUE";
   return action === "APPROVE" || action === "SIGN";
 }
 
@@ -84,6 +100,8 @@ function auditActionForWorkflow(action: WorkflowAction): AuditAction {
       return AuditAction.APPROVE;
     case "SIGN":
       return AuditAction.SIGN;
+    case "SIGN_ISSUE":
+      return AuditAction.SIGN_ISSUE;
     case "REJECT":
       return AuditAction.REJECT;
     default:
@@ -116,6 +134,9 @@ export function getAllowedActions(
   }
   if (entityType === "AWS_DOCUMENT") {
     return getAllowedAwsDocumentActions(status, role, actorUserId, entityMeta);
+  }
+  if (entityType === "COA_DOCUMENT") {
+    return getAllowedCoaDocumentActions(status, role);
   }
   return [];
 }
@@ -155,6 +176,17 @@ export function getAllowedAwsDocumentActions(
     actions.push("SIGN", "REJECT");
   }
   return actions;
+}
+
+/** US-13-7 — QA_MGR may sign-and-issue when COA is AUTO_GENERATED. */
+export function getAllowedCoaDocumentActions(
+  status: WorkflowStatus,
+  role: Role,
+): WorkflowAction[] {
+  if (status === "AUTO_GENERATED" && role === Role.QA_MGR) {
+    return ["SIGN_ISSUE"];
+  }
+  return [];
 }
 
 async function loadStandingSpec(entityId: string, tx?: Tx): Promise<StandingEntityRecord> {
@@ -199,6 +231,26 @@ async function loadAwsDocument(entityId: string, tx?: Tx): Promise<AwsDocumentRe
     submittedById: doc.submittedById,
     qcApprovedById: doc.qcApprovedById,
     assignedQcExecId: doc.batch.assignedQcExecId,
+  };
+}
+
+async function loadCoaDocument(entityId: string, tx?: Tx): Promise<CoaDocumentRecord> {
+  const doc = await batchesRepo.findBatchDocumentById(entityId, tx ?? prisma);
+  if (!doc) throw AppError.notFound("Batch document");
+
+  const awsDoc = await batchesRepo.findBatchDocumentByType(doc.batchId, DocType.AWS, tx ?? prisma);
+
+  return {
+    id: doc.id,
+    status: doc.status as WorkflowStatus,
+    docNo: doc.docNo,
+    batchId: doc.batchId,
+    batchNo: doc.batch.batchNo,
+    batchArnNo: doc.batch.arnNo,
+    batchStatus: doc.batch.status,
+    batchCreatedById: doc.batch.createdById,
+    batchAssignedQcExecId: doc.batch.assignedQcExecId,
+    awsQcApprovedById: awsDoc?.qcApprovedById ?? null,
   };
 }
 
@@ -327,18 +379,30 @@ function enforceAwsDocumentGuards(
   }
 }
 
+function enforceBatchGuards(
+  action: WorkflowAction,
+  entity: BatchEntityRecord,
+  actorUserId: string,
+): void {
+  if (action === "APPROVE") {
+    if (actorUserId === entity.createdById) {
+      throw AppError.selfApproval("Approver cannot be the batch creator");
+    }
+  }
+}
+
 async function onStandingSpecSigned(
   tx: Tx,
   entity: StandingEntityRecord,
   actor: JwtAccessPayload,
 ): Promise<void> {
   if (entity.supersedesId) {
-    await specsRepo.supersedeSpecPair(entity.supersedesId, tx);
-    await auditLog({
+    await specsRepo.supersedeSpecPair(entity.supersedesId, tx, {
       userId: actor.userId,
       action: AuditAction.SUPERSEDE,
       entityType: AuditEntityType.SPEC,
       entityId: entity.supersedesId,
+      oldStatus: StandingDocStatus.QA_SIGNED,
     });
   }
 
@@ -352,10 +416,15 @@ async function onStandingSpecSigned(
     throw AppError.conflict("Only one QA_SIGNED SPEC may exist per product and variant");
   }
 
-  await renderDocuments("STANDING_SPEC", entity.id, {
-    userId: actor.userId,
-    docNo: entity.specNo,
-  });
+  await renderDocuments(
+    "STANDING_SPEC",
+    entity.id,
+    {
+      userId: actor.userId,
+      docNo: entity.specNo,
+    },
+    tx,
+  );
 }
 
 async function dispatchStandingNotifications(
@@ -539,6 +608,45 @@ async function dispatchAwsDocumentNotifications(
   }
 }
 
+/** US-13-9 / Epic 14 — notify QC/QA on batch release; Production/Stores deferred. */
+async function dispatchCoaSignIssueNotifications(
+  entity: CoaDocumentRecord,
+  actor: JwtAccessPayload,
+  tx: Tx,
+): Promise<void> {
+  if (!entity.batchArnNo) return;
+
+  const recipientIds = new Set<string>();
+  if (entity.batchCreatedById) recipientIds.add(entity.batchCreatedById);
+  if (entity.batchAssignedQcExecId) recipientIds.add(entity.batchAssignedQcExecId);
+
+  const qcDeptId = await findDepartmentIdByName(DeptName.QC, tx);
+  const qaDeptId = await findDepartmentIdByName(DeptName.QA, tx);
+
+  if (qcDeptId) {
+    (await resolveRecipients({ role: Role.QC_MGR, departmentId: qcDeptId }, tx)).forEach((id) =>
+      recipientIds.add(id),
+    );
+  }
+  if (qaDeptId) {
+    (await resolveRecipients({ role: Role.QA_MGR, departmentId: qaDeptId }, tx)).forEach((id) =>
+      recipientIds.add(id),
+    );
+  }
+
+  // TODO US-13-9: notify Production and Stores user groups when modeled in Phase 1 schema.
+
+  await notify({
+    recipients: { users: [...recipientIds] },
+    type: "BATCH_RELEASED",
+    title: `Batch ${entity.batchArnNo} released`,
+    message: `Batch ${entity.batchNo} (${entity.batchArnNo}) has been released.`,
+    link: batchLink(entity.batchId),
+    excludeUserId: actor.userId,
+    tx,
+  });
+}
+
 async function transitionStandingSpec(input: TransitionInput) {
   const entity = await loadStandingSpec(input.entityId, input.tx);
   const fromStatus = entity.status;
@@ -571,6 +679,20 @@ async function transitionStandingSpec(input: TransitionInput) {
       input.entityId,
       buildStandingStatusUpdate(input.action, input.actor.userId, rule.toStatus, entity),
       tx,
+      {
+        userId: input.actor.userId,
+        userName: actorUser?.fullName,
+        role: input.actor.role,
+        department: actorUser?.department?.name,
+        action: auditActionForWorkflow(input.action),
+        entityType: AuditEntityType.SPEC,
+        entityId: entity.id,
+        docNo: entity.specNo,
+        fieldChanged: "status",
+        oldStatus: fromStatus as StandingDocStatus,
+        comment: input.comment,
+        ipAddress: input.ipAddress,
+      },
     );
     if (input.action === "SIGN" && rule.toStatus === "QA_SIGNED") {
       await onStandingSpecSigned(tx, entity, input.actor);
@@ -582,22 +704,6 @@ async function transitionStandingSpec(input: TransitionInput) {
   const updated = input.tx
     ? await runTransition(input.tx)
     : await prisma.$transaction(runTransition);
-
-  await auditLog({
-    userId: input.actor.userId,
-    userName: actorUser?.fullName,
-    role: input.actor.role,
-    department: actorUser?.department?.name,
-    action: auditActionForWorkflow(input.action),
-    entityType: AuditEntityType.SPEC,
-    entityId: entity.id,
-    docNo: entity.specNo,
-    fieldChanged: "status",
-    oldValue: fromStatus,
-    newValue: rule.toStatus,
-    comment: input.comment,
-    ipAddress: input.ipAddress,
-  });
 
   return updated;
 }
@@ -613,8 +719,16 @@ async function transitionBatch(input: TransitionInput) {
     throw AppError.forbidden(`Role ${rule.requiredRole} is required for this action`);
   }
 
+  enforceBatchGuards(input.action, entity, input.actor.userId);
+
   if (input.action === "REJECT" && (!input.comment || input.comment.trim() === "")) {
     throw AppError.validation("Rejection comment is required");
+  }
+  if (requiresPassword("BATCH", input.action) && !input.password) {
+    throw AppError.validation("Password is required for this action");
+  }
+  if (requiresPassword("BATCH", input.action)) {
+    await verifyUserPassword(input.actor.userId, input.password!);
   }
 
   const actorUser = await getUserById(input.actor.userId);
@@ -633,6 +747,25 @@ async function transitionBatch(input: TransitionInput) {
       await openAwsForBatch(tx, input.entityId);
     }
 
+    await auditLog(
+      {
+        userId: input.actor.userId,
+        userName: actorUser?.fullName,
+        role: input.actor.role,
+        department: actorUser?.department?.name,
+        action: auditActionForWorkflow(input.action),
+        entityType: AuditEntityType.BATCH,
+        entityId: entity.id,
+        docNo: entity.batchNo,
+        fieldChanged: "status",
+        oldValue: fromStatus,
+        newValue: rule.toStatus,
+        comment: input.comment,
+        ipAddress: input.ipAddress,
+      },
+      tx,
+    );
+
     await dispatchBatchNotifications(input.action, entity, input.actor, tx, input.comment);
     return batchesRepo.findBatchWithDetails(input.entityId, tx);
   };
@@ -640,22 +773,6 @@ async function transitionBatch(input: TransitionInput) {
   const updated = input.tx
     ? await runTransition(input.tx)
     : await prisma.$transaction(runTransition);
-
-  await auditLog({
-    userId: input.actor.userId,
-    userName: actorUser?.fullName,
-    role: input.actor.role,
-    department: actorUser?.department?.name,
-    action: auditActionForWorkflow(input.action),
-    entityType: AuditEntityType.BATCH,
-    entityId: entity.id,
-    docNo: entity.batchNo,
-    fieldChanged: "status",
-    oldValue: fromStatus,
-    newValue: rule.toStatus,
-    comment: input.comment,
-    ipAddress: input.ipAddress,
-  });
 
   return updated;
 }
@@ -708,12 +825,36 @@ async function transitionAwsDocument(input: TransitionInput) {
     await batchesRepo.updateBatchDocumentWorkflow(input.entityId, statusUpdate, tx);
 
     if (input.action === "SIGN" && rule.toStatus === "QA_SIGNED") {
-      await renderDocuments("AWS", input.entityId, {
-        userId: input.actor.userId,
-        docNo: entity.docNo,
-      });
+      await renderDocuments(
+        "AWS",
+        input.entityId,
+        {
+          userId: input.actor.userId,
+          docNo: entity.docNo,
+        },
+        tx,
+      );
       await generateCoaFromSignedAws(tx, entity.batchId, input.entityId, entity.docNo);
     }
+
+    await auditLog(
+      {
+        userId: input.actor.userId,
+        userName: actorUser?.fullName,
+        role: input.actor.role,
+        department: actorUser?.department?.name,
+        action: auditActionForWorkflow(input.action),
+        entityType: AuditEntityType.AWS,
+        entityId: entity.id,
+        docNo: entity.docNo,
+        fieldChanged: "status",
+        oldValue: fromStatus,
+        newValue: rule.toStatus,
+        comment: input.comment,
+        ipAddress: input.ipAddress,
+      },
+      tx,
+    );
 
     await dispatchAwsDocumentNotifications(input.action, entity, input.actor, tx, input.comment);
     return batchesRepo.findBatchDocumentWithDetails(input.entityId, tx);
@@ -723,21 +864,80 @@ async function transitionAwsDocument(input: TransitionInput) {
     ? await runTransition(input.tx)
     : await prisma.$transaction(runTransition);
 
-  await auditLog({
-    userId: input.actor.userId,
-    userName: actorUser?.fullName,
-    role: input.actor.role,
-    department: actorUser?.department?.name,
-    action: auditActionForWorkflow(input.action),
-    entityType: AuditEntityType.AWS,
-    entityId: entity.id,
-    docNo: entity.docNo,
-    fieldChanged: "status",
-    oldValue: fromStatus,
-    newValue: rule.toStatus,
-    comment: input.comment,
-    ipAddress: input.ipAddress,
-  });
+  return updated;
+}
+
+/** US-13-7/8/9 — COA sign-and-issue via workflow engine (S4). */
+async function transitionCoaDocument(input: TransitionInput) {
+  const entity = await loadCoaDocument(input.entityId, input.tx);
+  const fromStatus = entity.status;
+  const rule = findTransitionRule("COA_DOCUMENT", fromStatus, input.action);
+  if (!rule) {
+    throw AppError.illegalTransition(`Illegal transition ${fromStatus} → ${input.action}`);
+  }
+  if (input.actor.role !== rule.requiredRole) {
+    throw AppError.forbidden(`Role ${rule.requiredRole} is required for this action`);
+  }
+
+  if (input.action === "SIGN_ISSUE") {
+    enforceCoaSignIssueGuards(entity.awsQcApprovedById, input.actor.userId);
+  }
+
+  if (!input.password) {
+    throw AppError.validation("Password is required for this action");
+  }
+  await verifyUserPassword(input.actor.userId, input.password);
+
+  const actorUser = await getUserById(input.actor.userId);
+
+  const runTransition = async (tx: Tx) => {
+    await batchesRepo.transitionCoaDocumentToIssued(input.entityId, input.actor.userId, tx);
+    await batchesRepo.releaseBatch(entity.batchId, tx);
+
+    await dispatchCoaSignIssueNotifications(entity, input.actor, tx);
+
+    await auditLog(
+      {
+        userId: input.actor.userId,
+        userName: actorUser?.fullName,
+        role: input.actor.role,
+        department: actorUser?.department?.name,
+        action: AuditAction.SIGN_ISSUE,
+        entityType: AuditEntityType.COA,
+        entityId: entity.id,
+        docNo: entity.docNo,
+        fieldChanged: "status",
+        oldValue: fromStatus,
+        newValue: rule.toStatus,
+        ipAddress: input.ipAddress,
+      },
+      tx,
+    );
+
+    await auditLog(
+      {
+        userId: input.actor.userId,
+        userName: actorUser?.fullName,
+        role: input.actor.role,
+        department: actorUser?.department?.name,
+        action: AuditAction.UPDATE,
+        entityType: AuditEntityType.BATCH,
+        entityId: entity.batchId,
+        fieldChanged: "status",
+        oldValue: entity.batchStatus,
+        newValue: BatchStatus.RELEASED,
+        comment: `Batch released via COA ${entity.docNo} sign-and-issue`,
+        ipAddress: input.ipAddress,
+      },
+      tx,
+    );
+
+    return batchesRepo.findBatchDocumentWithDetails(input.entityId, tx);
+  };
+
+  const updated = input.tx
+    ? await runTransition(input.tx)
+    : await prisma.$transaction(runTransition);
 
   return updated;
 }
@@ -750,6 +950,8 @@ export async function transition(input: TransitionInput) {
       return transitionBatch(input);
     case "AWS_DOCUMENT":
       return transitionAwsDocument(input);
+    case "COA_DOCUMENT":
+      return transitionCoaDocument(input);
     default:
       throw AppError.fromCode("INTERNAL", "Unsupported entity type");
   }

@@ -3,7 +3,7 @@ import { asyncHandler } from "../../lib/async-handler";
 import { ok } from "../../lib/api-response";
 import type { AuthenticatedRequest } from "../../types/authenticated-request";
 import type { RejectBody, TransitionBody } from "../masters/masters.schema";
-import type { CreateSpecBody, PatchSpecBody } from "./specs.schema";
+import type { CreateSpecBody, ListSpecsQuery, PatchSpecBody, ReviseSpecBody } from "./specs.schema";
 import {
   approveSpec,
   createSpec,
@@ -18,7 +18,8 @@ import {
 
 export const listForProduct = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
   const { id, productId } = req.params;
-  const specs = await listSpecsForProduct(productId ?? id);
+  const query = req.query as ListSpecsQuery;
+  const specs = await listSpecsForProduct(productId ?? id, query);
   res.json(ok(specs));
 });
 
@@ -70,7 +71,8 @@ export const reject = asyncHandler(async (req: AuthenticatedRequest, res: Respon
 });
 
 export const revise = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const body = req.body as ReviseSpecBody;
   const { id } = req.params;
-  const spec = await reviseSpec(id, req.user, req.ip);
+  const spec = await reviseSpec(id, req.user, req.ip, body);
   res.status(201).json(ok(spec));
 });

@@ -3,7 +3,6 @@ import { AppError } from "../../lib/app-error";
 import { JwtAccessPayload } from "../../types/auth.types";
 import {
   hasInstrumentExpiryAck,
-  hasOosAcknowledgement,
   hasReagentExpiryAck,
   isInstrumentExpired,
   isReagentExpired,
@@ -11,6 +10,7 @@ import {
   startOfUtcDay,
 } from "../../services/aws-expiry.service";
 import * as authRepo from "../auth/auth.repository";
+import { MIN_EXPIRY_ACK_COMMENT_LENGTH, MIN_OOS_ACK_COMMENT_LENGTH } from "./aws.constants";
 import type { AwsSectionDetail } from "./aws.repository";
 
 export function assertEditableAwsDocument(section: AwsSectionDetail): void {
@@ -81,7 +81,7 @@ export async function assertExpiryAcknowledged(section: AwsSectionDetail): Promi
 }
 
 export function assertOosAcknowledged(section: AwsSectionDetail): void {
-  if (section.isOos && !hasOosAcknowledgement(section.readings)) {
+  if (section.isOos && !section.oosAcknowledged) {
     throw AppError.oosNotAcknowledged();
   }
 }
@@ -104,5 +104,23 @@ export function assertAwaitingCheck(section: AwsSectionDetail): void {
 export function rejectClientComputedFields(body: Record<string, unknown>): void {
   if ("calculatedResult" in body || "conclusion" in body || "resultDisplay" in body) {
     throw AppError.validation("calculatedResult, conclusion, and resultDisplay are server-computed");
+  }
+}
+
+/** US-12-12: substantive OOS acknowledgement comment. */
+export function validateOosAckComment(comment: string): void {
+  if (comment.trim().length < MIN_OOS_ACK_COMMENT_LENGTH) {
+    throw AppError.validation(
+      `OOS acknowledgement comment must be at least ${MIN_OOS_ACK_COMMENT_LENGTH} characters`,
+    );
+  }
+}
+
+/** US-7-8: substantive expired instrument/reagent acknowledgement comment. */
+export function validateExpiryAckComment(comment: string): void {
+  if (comment.trim().length < MIN_EXPIRY_ACK_COMMENT_LENGTH) {
+    throw AppError.validation(
+      `Expiry acknowledgement comment must be at least ${MIN_EXPIRY_ACK_COMMENT_LENGTH} characters`,
+    );
   }
 }

@@ -128,6 +128,10 @@ export const ERROR_CODES = {
     status: HTTP.CONFLICT,
     message: "COA is not in a signable state",
   },
+  COA_NOT_EDITABLE: {
+    status: HTTP.CONFLICT,
+    message: "Issued COA cannot be edited; use formal change control",
+  },
   FEATURE_NOT_IMPLEMENTED: {
     status: HTTP.NOT_IMPLEMENTED,
     message: "This feature is not yet available",

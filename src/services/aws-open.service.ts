@@ -6,7 +6,7 @@ import { AuditAction, AuditEntityType, log as auditLog } from "./audit.service";
 import { batchLink } from "./notification-links";
 import { notify } from "./notification.service";
 
-/** Opens AWS for execution after batch QA approval (Rev 2.3). */
+/** US-9-13 / Epic 12: activate AWS batch_document and populate sections from batch snapshot. */
 export async function openAwsForBatch(tx: Tx, batchId: string): Promise<void> {
   const awsDoc = await batchesRepo.findBatchDocumentByType(batchId, "AWS", tx);
   if (!awsDoc) {
@@ -16,14 +16,19 @@ export async function openAwsForBatch(tx: Tx, batchId: string): Promise<void> {
     throw AppError.conflict("AWS document is not in PENDING status");
   }
 
-  const snapshotTests = await batchesRepo.findSpecDocumentTestsByBatchId(batchId, tx);
-  await batchesRepo.deleteAwsSectionsForDocument(awsDoc.id, tx);
+  const existingSections = await tx.awsSection.count({
+    where: { batchDocumentId: awsDoc.id },
+  });
+  if (existingSections > 0) {
+    throw AppError.conflict("AWS sections already populated for this document");
+  }
 
+  const snapshotTests = await batchesRepo.findSpecDocumentTestsByBatchId(batchId, tx);
   if (snapshotTests.length > 0) {
     await batchesRepo.createAwsSections(
-      snapshotTests.map((t) => ({
+      snapshotTests.map((test) => ({
         batchDocumentId: awsDoc.id,
-        specDocumentTestId: t.id,
+        specDocumentTestId: test.id,
         status: SectionStatus.NOT_STARTED,
       })),
       tx,
@@ -34,14 +39,17 @@ export async function openAwsForBatch(tx: Tx, batchId: string): Promise<void> {
 
   const batch = await batchesRepo.findBatchById(batchId, tx);
 
-  await auditLog({
-    userName: "System",
-    action: AuditAction.GENERATE,
-    entityType: AuditEntityType.AWS,
-    entityId: awsDoc.id,
-    docNo: awsDoc.docNo,
-    comment: `AWS opened with ${snapshotTests.length} sections from batch snapshot`,
-  });
+  await auditLog(
+    {
+      userName: "System",
+      action: AuditAction.GENERATE,
+      entityType: AuditEntityType.AWS,
+      entityId: awsDoc.id,
+      docNo: awsDoc.docNo,
+      comment: `AWS activated (PENDING→DRAFT) with ${snapshotTests.length} sections from batch snapshot`,
+    },
+    tx,
+  );
 
   if (batch?.assignedQcExecId && batch.batchNo) {
     await notify({

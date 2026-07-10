@@ -5,6 +5,9 @@ import documentsRoutes from "../modules/documents/documents.routes";
 import mastersRoutes from "../modules/masters/masters.routes";
 import notificationsRoutes from "../modules/notifications/notifications.routes";
 import productsRoutes from "../modules/products/products.routes";
+import usersRoutes from "../modules/users/users.routes";
+import instrumentsRoutes from "../modules/instruments/instruments.routes";
+import reagentsRoutes from "../modules/reagents/reagents.routes";
 import specsRoutes from "../modules/specs/specs.routes";
 import { awsDocRouter, awsSectionRouter } from "../modules/aws/aws.routes";
 
@@ -19,5 +22,8 @@ router.use("/documents", documentsRoutes);
 router.use("/aws/documents", awsDocRouter);
 router.use("/aws/sections", awsSectionRouter);
 router.use("/notifications", notificationsRoutes);
+router.use("/users", usersRoutes);
+router.use("/instruments", instrumentsRoutes);
+router.use("/reagents", reagentsRoutes);
 
 export default router;

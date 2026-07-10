@@ -1,23 +1,19 @@
-import { BatchStatus, DeptName, DocStatus, DocType, Role } from "@prisma/client";
-import { prisma } from "../../lib/prisma-types";
+import { DocStatus, DocType, Role } from "@prisma/client";
 import { AppError } from "../../lib/app-error";
 import { JwtAccessPayload } from "../../types/auth.types";
-import { AuditAction, AuditEntityType, log as auditLog } from "../../services/audit.service";
-import { batchLink } from "../../services/notification-links";
-import { notify } from "../../services/notification.service";
+import { rejectCoaWorkflowEdit } from "../../services/coa-guards";
 import { renderDocuments } from "../../services/render-documents.service";
-import { transition, getAllowedAwsDocumentActions } from "../../services/workflow-engine";
+import {
+  getAllowedAwsDocumentActions,
+  getAllowedCoaDocumentActions,
+  transition,
+} from "../../services/workflow-engine";
 import {
   resolveWorkflowEntityType,
   WorkflowAction,
   WorkflowStatus,
 } from "../../services/workflow.config";
-import { getUserById, verifyUserPassword } from "../auth/auth.service";
-import {
-  findDepartmentIdByName,
-  resolveRecipients,
-} from "../notifications/notifications.repository";
-import * as batchesRepo from "../batches/batches.repository";
+import { verifyUserPassword } from "../auth/auth.service";
 import { toDocumentDetail } from "./documents.mapper";
 import { DocumentAllowedAction, DocumentDetailDto } from "./documents.types";
 import * as documentsRepo from "./documents.repository";
@@ -53,10 +49,8 @@ export async function getDocumentDetail(
             assignedQcExecId: doc.batch.assignedQcExecId,
           },
         )
-      : doc.docType === DocType.COA &&
-          doc.status === DocStatus.AUTO_GENERATED &&
-          actor.role === Role.QA_MGR
-        ? ["SIGN_ISSUE"]
+      : entityType === "COA_DOCUMENT"
+        ? getAllowedCoaDocumentActions(doc.status as WorkflowStatus, actor.role)
         : [];
 
   return toDocumentDetail(doc, allowedActions);
@@ -75,10 +69,12 @@ export async function transitionDocument(
     throw AppError.notFound("Document");
   }
 
-  resolveEntityTypeOrThrow(doc.docType);
+  await rejectCoaWorkflowEdit(doc, action, actor, ipAddress);
+
+  const entityType = resolveEntityTypeOrThrow(doc.docType);
 
   await transition({
-    entityType: "AWS_DOCUMENT",
+    entityType,
     entityId: documentId,
     action,
     actor,
@@ -90,6 +86,7 @@ export async function transitionDocument(
   return getDocumentDetail(documentId, actor);
 }
 
+/** US-13-7 — distinct sign-and-issue endpoint; transition executes via workflow engine (S4). */
 export async function signAndIssueCoa(
   documentId: string,
   actor: JwtAccessPayload,
@@ -115,77 +112,18 @@ export async function signAndIssueCoa(
 
   await verifyUserPassword(actor.userId, password);
 
-  const actorUser = await getUserById(actor.userId);
-  const batchMeta = doc.batch;
-
-  await prisma.$transaction(async (tx) => {
-    await batchesRepo.transitionCoaDocumentToIssued(documentId, tx);
-    await batchesRepo.releaseBatch(doc.batchId, tx);
-
-    if (batchMeta.arnNo) {
-      const recipientIds = new Set<string>();
-      if (batchMeta.createdById) recipientIds.add(batchMeta.createdById);
-      if (batchMeta.assignedQcExecId) recipientIds.add(batchMeta.assignedQcExecId);
-
-      const qcDeptId = await findDepartmentIdByName(DeptName.QC, tx);
-      const qaDeptId = await findDepartmentIdByName(DeptName.QA, tx);
-
-      if (qcDeptId) {
-        (await resolveRecipients({ role: Role.QC_MGR, departmentId: qcDeptId }, tx)).forEach(
-          (id) => recipientIds.add(id),
-        );
-      }
-      if (qaDeptId) {
-        (await resolveRecipients({ role: Role.QA_MGR, departmentId: qaDeptId }, tx)).forEach(
-          (id) => recipientIds.add(id),
-        );
-      }
-
-      await notify({
-        recipients: { users: [...recipientIds] },
-        type: "BATCH_RELEASED",
-        title: `Batch ${batchMeta.arnNo} released`,
-        message: `Batch ${batchMeta.batchNo} (${batchMeta.arnNo}) has been released.`,
-        link: batchLink(doc.batchId),
-        excludeUserId: actor.userId,
-        tx,
-      });
-    }
+  await transition({
+    entityType: "COA_DOCUMENT",
+    entityId: documentId,
+    action: "SIGN_ISSUE",
+    actor,
+    password,
+    ipAddress,
   });
 
   await renderDocuments("COA", documentId, {
     userId: actor.userId,
     docNo: doc.docNo,
-  });
-
-  await auditLog({
-    userId: actor.userId,
-    userName: actorUser?.fullName,
-    role: actor.role,
-    department: actorUser?.department?.name,
-    action: AuditAction.SIGN_ISSUE,
-    entityType: AuditEntityType.COA,
-    entityId: doc.id,
-    docNo: doc.docNo,
-    fieldChanged: "status",
-    oldValue: DocStatus.AUTO_GENERATED,
-    newValue: DocStatus.ISSUED,
-    ipAddress,
-  });
-
-  await auditLog({
-    userId: actor.userId,
-    userName: actorUser?.fullName,
-    role: actor.role,
-    department: actorUser?.department?.name,
-    action: AuditAction.UPDATE,
-    entityType: AuditEntityType.BATCH,
-    entityId: doc.batchId,
-    fieldChanged: "status",
-    oldValue: BatchStatus.APPROVED,
-    newValue: BatchStatus.RELEASED,
-    comment: `Batch released via COA ${doc.docNo} sign-and-issue`,
-    ipAddress,
   });
 
   return getDocumentDetail(documentId, actor);
