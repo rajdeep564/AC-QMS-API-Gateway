@@ -22,6 +22,7 @@
     "verify:session3-phase-b": "tsx scripts/verify-session3-phase-b.ts",
     "verify:session3-phase-c": "tsx scripts/verify-session3-phase-c.ts",
     "verify:users": "tsx scripts/verify-users-list.ts",
+    "verify:b22": "tsx scripts/verify-b22.ts",
     "verify:p2c": "tsx scripts/verify-p2c-backend-prep.ts",
     "verify:audit-tx-s3": "tsx scripts/verify-audit-tx-s3.ts"
   },

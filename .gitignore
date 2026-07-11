@@ -4,3 +4,7 @@ node_modules/
 !.env.example
 dist/
 /uploads/
+
+# Collaborator artifacts — commit these (not ignored):
+# docs/audits/*.md
+# docs/*-verification-report.md

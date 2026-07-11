@@ -2,10 +2,8 @@ import {
   CoaComplianceVerdict,
   Conclusion,
   DeptName,
-  ResultType,
   Role,
 } from "@prisma/client";
-import type { SpecDocumentTest } from "@prisma/client";
 import type { Tx } from "../lib/prisma-types";
 import { AppError } from "../lib/app-error";
 import { findDepartmentIdByName } from "../modules/notifications/notifications.repository";
@@ -13,68 +11,11 @@ import * as batchesRepo from "../modules/batches/batches.repository";
 import { AuditAction, AuditEntityType, log as auditLog } from "./audit.service";
 import { documentLink } from "./notification-links";
 import { notify } from "./notification.service";
-
-type QualitativeReadings = {
-  text?: string;
-  passFail?: "PASS" | "FAIL";
-  oosAckComment?: string;
-};
-
-function decimalToString(value: { toString(): string } | null | undefined): string | null {
-  if (value === null || value === undefined) return null;
-  return value.toString();
-}
-
-export function formatAcceptanceLimits(specTest: SpecDocumentTest): string {
-  if (specTest.resultType === ResultType.QUALITATIVE && specTest.acceptanceCriteria) {
-    return specTest.acceptanceCriteria;
-  }
-
-  const min = decimalToString(specTest.minValue);
-  const max = decimalToString(specTest.maxValue);
-  const uom = specTest.uom ? ` ${specTest.uom}` : "";
-
-  switch (specTest.operator) {
-    case "BETWEEN":
-      return `Between ${min} and ${max}${uom}`;
-    case "NMT":
-      return `NMT ${max}${uom}`;
-    case "NLT":
-      return `NLT ${min}${uom}`;
-    default:
-      return specTest.acceptanceCriteria ?? "—";
-  }
-}
-
-function formatConclusionLabel(conclusion: Conclusion | null): string {
-  switch (conclusion) {
-    case Conclusion.SATISFACTORY:
-      return "Satisfactory";
-    case Conclusion.NOT_SATISFACTORY:
-      return "Not Satisfactory";
-    case Conclusion.PASS:
-      return "Pass";
-    case Conclusion.FAIL:
-      return "Fail";
-    default:
-      return "—";
-  }
-}
-
-function formatSectionResult(
-  resultType: ResultType,
-  resultDisplay: string | null,
-  readings: unknown,
-): string {
-  if (resultType === ResultType.QUANTITATIVE) {
-    return resultDisplay ?? "—";
-  }
-
-  const obs = (readings ?? {}) as QualitativeReadings;
-  if (obs.text?.trim()) return obs.text.trim();
-  if (obs.passFail) return obs.passFail === "PASS" ? "Pass" : "Fail";
-  return "—";
-}
+import {
+  formatAcceptanceLimits,
+  formatConclusionLabel,
+  formatSectionResult,
+} from "./render-formatters";
 
 function computeComplianceVerdict(
   conclusions: (Conclusion | null)[],

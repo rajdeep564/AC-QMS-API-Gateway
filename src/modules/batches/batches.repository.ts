@@ -154,6 +154,33 @@ export async function findBatchDocumentWithDetails(documentId: string, client: D
   });
 }
 
+const coaRenderInclude = {
+  coaResults: { orderBy: { sortOrder: "asc" as const } },
+  createdBy: { select: { id: true, fullName: true, role: true } },
+  qcApprovedBy: { select: { id: true, fullName: true, role: true } },
+  qaSignedBy: { select: { id: true, fullName: true, role: true } },
+  batch: {
+    include: {
+      product: true,
+      sourceSpec: {
+        include: { moaDoc: { select: { moaNo: true } } },
+      },
+    },
+  },
+} satisfies Prisma.BatchDocumentInclude;
+
+export type CoaDocumentForRender = Prisma.BatchDocumentGetPayload<{
+  include: typeof coaRenderInclude;
+}>;
+
+/** Load COA batch document with all relations needed for CoaRenderInput mapping. */
+export async function findCoaDocumentForRender(documentId: string, client: Db = prisma) {
+  return client.batchDocument.findUnique({
+    where: { id: documentId },
+    include: coaRenderInclude,
+  });
+}
+
 export async function updateBatchStatus(
   batchId: string,
   data: { status: BatchStatus; approvedById?: string },
