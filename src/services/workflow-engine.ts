@@ -932,6 +932,22 @@ async function transitionCoaDocument(input: TransitionInput) {
       tx,
     );
 
+    await auditLog(
+      {
+        userId: input.actor.userId,
+        userName: actorUser?.fullName,
+        role: input.actor.role,
+        department: actorUser?.department?.name,
+        action: AuditAction.GENERATE,
+        entityType: AuditEntityType.COA,
+        entityId: entity.id,
+        docNo: entity.docNo,
+        comment: "COA render requested",
+        ipAddress: input.ipAddress,
+      },
+      tx,
+    );
+
     return batchesRepo.findBatchDocumentWithDetails(input.entityId, tx);
   };
 

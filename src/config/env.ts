@@ -10,6 +10,8 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive(),
   CORS_ORIGIN: z.string().url(),
   NODE_ENV: z.enum(["development", "production", "test"]),
+  DOC_MODULE_URL: z.string().url(),
+  DOC_MODULE_API_KEY: z.string().min(1),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -31,4 +33,6 @@ export const config = {
   corsOrigin: env.CORS_ORIGIN,
   nodeEnv: env.NODE_ENV,
   isProduction: env.NODE_ENV === "production",
+  docModuleUrl: env.DOC_MODULE_URL,
+  docModuleApiKey: env.DOC_MODULE_API_KEY,
 } as const;

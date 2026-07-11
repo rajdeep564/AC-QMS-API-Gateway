@@ -11,6 +11,7 @@
 | Document | Purpose |
 |---|---|
 | [audits/glycine-downstream-audit.md](audits/glycine-downstream-audit.md) | Completed downstream flows audit (SPEC/MOA/AWS/COA) |
+| [audits/HEALTH_CHECK.md](audits/HEALTH_CHECK.md) | Full-system health check (Gateway + Frontend, 2026-07-09) |
 | [client-questionnaire.md](client-questionnaire.md) | Client decisions — numbering, instruments, shelf life, CC format |
 | [epics/epic-21-pdf-display.md](epics/epic-21-pdf-display.md) | PDF/display backlog from audit |
 | [designs/formula-cross-section-references.md](designs/formula-cross-section-references.md) | Proposed Assay `%LOD` cross-section formula design |

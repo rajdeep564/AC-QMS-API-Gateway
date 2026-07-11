@@ -1,6 +1,35 @@
+# =============================================================================
+# AC-QMS-API-Gateway — push policy
+# Commit: source, prisma schema/migrations/seed, scripts/, .env.example,
+#         package.json + package-lock.json, docs/audits/, verification reports.
+# Never commit: node_modules, .env secrets, dist, local uploads, IDE caches.
+# =============================================================================
+
+# --- Dependencies (never commit) ---
 node_modules/
+
+# --- Secrets (never commit; example template is tracked) ---
 .env
 .env.*
 !.env.example
+
+# --- Build / runtime output ---
 dist/
 /uploads/
+
+# --- Logs & local tooling ---
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.tsbuildinfo
+
+# --- Test runners (HTML coverage only; verification scripts ARE committed) ---
+coverage/
+
+# Explicitly tracked (do NOT add ignore rules for):
+# - scripts/verify-*.ts
+# - docs/audits/*.md, docs/*-verification-report.md
+# - prisma/migrations/, docker-compose.yml, .env.example
