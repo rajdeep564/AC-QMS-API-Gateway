@@ -8,6 +8,8 @@ import { patchSpecBodySchema, reviseSpecBodySchema } from "./specs.schema";
 import {
   approve,
   getById,
+  listApprovalQueue,
+  listSignatureQueue,
   patch,
   reject,
   revise,
@@ -17,6 +19,18 @@ import {
 
 const router = Router();
 
+router.get(
+  "/approval-queue",
+  requireAuth,
+  requireRole(Role.QC_MGR, Role.SADMIN),
+  listApprovalQueue,
+);
+router.get(
+  "/signature-queue",
+  requireAuth,
+  requireRole(Role.QA_MGR, Role.SADMIN),
+  listSignatureQueue,
+);
 router.get("/:id", requireAuth, getById);
 router.patch("/:id", requireAuth, requireRole(Role.QC_EXEC), validate(patchSpecBodySchema), patch);
 router.post("/:id/submit", requireAuth, requireRole(Role.QC_EXEC), submit);

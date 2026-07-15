@@ -5,9 +5,17 @@ import type { AuthenticatedRequest } from "../../types/authenticated-request";
 import type { RejectBody, SubmitDocumentBody, TransitionBody } from "../masters/masters.schema";
 import {
   getDocumentDetail,
+  listAwsApprovalQueue,
   signAndIssueCoa,
   transitionDocument,
 } from "./documents.service";
+
+export const listAwsApprovalQueueHandler = asyncHandler(
+  async (req: AuthenticatedRequest, res: Response) => {
+    const queue = await listAwsApprovalQueue(req.user);
+    res.json(ok(queue));
+  },
+);
 
 export const getById = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
   const { id } = req.params;

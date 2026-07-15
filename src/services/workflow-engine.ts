@@ -19,7 +19,7 @@ import { enforceCoaSignIssueGuards } from "./coa-guards";
 import { AuditAction, AuditEntityType, log as auditLog } from "./audit.service";
 import { generateCoaFromSignedAws } from "./coa-generator";
 import { notify } from "./notification.service";
-import { batchLink, documentLink, standingSpecLink } from "./notification-links";
+import { awsDocumentLink, batchLink, standingSpecLink } from "./notification-links";
 import { renderDocuments } from "./render-documents.service";
 import {
   findTransitionRule,
@@ -89,6 +89,9 @@ type CoaDocumentRecord = {
 function requiresPassword(entityType: WorkflowEntityType, action: WorkflowAction): boolean {
   if (entityType === "BATCH") return action === "APPROVE";
   if (entityType === "COA_DOCUMENT") return action === "SIGN_ISSUE";
+  if (entityType === "AWS_DOCUMENT") {
+    return action === "SUBMIT" || action === "APPROVE" || action === "SIGN";
+  }
   return action === "APPROVE" || action === "SIGN";
 }
 
@@ -550,8 +553,9 @@ async function dispatchAwsDocumentNotifications(
   actor: JwtAccessPayload,
   tx: Tx,
   comment?: string,
+  fromStatus?: WorkflowStatus,
 ): Promise<void> {
-  const link = documentLink(entity.batchId, entity.id);
+  const link = awsDocumentLink(entity.id);
   const label = `AWS ${entity.docNo}`;
 
   switch (action) {
@@ -592,8 +596,19 @@ async function dispatchAwsDocumentNotifications(
       break;
     case "REJECT": {
       const rejectionNote = comment?.trim() ? ` Reason: ${comment.trim()}` : "";
+      const recipientIds = new Set<string>();
+      if (entity.assignedQcExecId) recipientIds.add(entity.assignedQcExecId);
+      if (fromStatus === "QC_APPROVED") {
+        if (entity.qcApprovedById) recipientIds.add(entity.qcApprovedById);
+        const qcDeptId = await findDepartmentIdByName(DeptName.QC, tx);
+        if (qcDeptId) {
+          (await resolveRecipients({ role: Role.QC_MGR, departmentId: qcDeptId }, tx)).forEach(
+            (id) => recipientIds.add(id),
+          );
+        }
+      }
       await notify({
-        recipients: { users: entity.assignedQcExecId ? [entity.assignedQcExecId] : [] },
+        recipients: { users: [...recipientIds] },
         type: "AWS_REJECTED",
         title: "AWS rejected",
         message: `${label} was rejected.${rejectionNote}`,
@@ -791,12 +806,14 @@ async function transitionAwsDocument(input: TransitionInput) {
   enforceAwsDocumentGuards(input.action, entity, input.actor.userId);
 
   if (input.action === "SUBMIT") {
-    const allComplete = await batchesRepo.allAwsSectionsComplete(
+    const summary = await batchesRepo.countAwsSectionCompletion(
       input.entityId,
       input.tx ?? prisma,
     );
-    if (!allComplete) {
-      throw AppError.validation("All AWS sections must be COMPLETE before submission");
+    if (!summary.allComplete) {
+      throw AppError.validation(
+        `${summary.incomplete} of ${summary.total} sections incomplete`,
+      );
     }
   }
 
@@ -823,6 +840,10 @@ async function transitionAwsDocument(input: TransitionInput) {
     }
 
     await batchesRepo.updateBatchDocumentWorkflow(input.entityId, statusUpdate, tx);
+
+    if (input.action === "REJECT") {
+      await batchesRepo.reopenAwsSectionsForRework(input.entityId, tx);
+    }
 
     if (input.action === "SIGN" && rule.toStatus === "QA_SIGNED") {
       await renderDocuments(
@@ -856,7 +877,14 @@ async function transitionAwsDocument(input: TransitionInput) {
       tx,
     );
 
-    await dispatchAwsDocumentNotifications(input.action, entity, input.actor, tx, input.comment);
+    await dispatchAwsDocumentNotifications(
+      input.action,
+      entity,
+      input.actor,
+      tx,
+      input.comment,
+      fromStatus,
+    );
     return batchesRepo.findBatchDocumentWithDetails(input.entityId, tx);
   };
 

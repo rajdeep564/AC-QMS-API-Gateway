@@ -9,7 +9,7 @@ import { AppError } from "../lib/app-error";
 import { findDepartmentIdByName } from "../modules/notifications/notifications.repository";
 import * as batchesRepo from "../modules/batches/batches.repository";
 import { AuditAction, AuditEntityType, log as auditLog } from "./audit.service";
-import { documentLink } from "./notification-links";
+import { coaDocumentLink } from "./notification-links";
 import { notify } from "./notification.service";
 import {
   formatAcceptanceLimits,
@@ -104,7 +104,7 @@ export async function generateCoaFromSignedAws(
       type: "COA_GENERATED",
       title: "COA pending sign & issue",
       message: `COA ${coaDoc.docNo} generated for batch ${batch.batchNo}.`,
-      link: documentLink(batchId, coaDoc.id),
+      link: coaDocumentLink(coaDoc.id),
       tx,
     });
   }

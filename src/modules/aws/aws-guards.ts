@@ -1,4 +1,4 @@
-import { DeptName, DocStatus, DocType, ResultType, SectionStatus } from "@prisma/client";
+import { BatchStatus, DeptName, DocStatus, DocType, ResultType, SectionStatus } from "@prisma/client";
 import { AppError } from "../../lib/app-error";
 import { JwtAccessPayload } from "../../types/auth.types";
 import {
@@ -11,9 +11,65 @@ import {
 } from "../../services/aws-expiry.service";
 import * as authRepo from "../auth/auth.repository";
 import { MIN_EXPIRY_ACK_COMMENT_LENGTH, MIN_OOS_ACK_COMMENT_LENGTH } from "./aws.constants";
+import { buildSectionFieldConfig } from "./aws-field-config";
+import { countSectionAttachments } from "./aws-attachments.service";
 import type { AwsSectionDetail } from "./aws.repository";
 
+export function assertAwsDocumentReady(doc: {
+  status: DocStatus;
+  batch: { status: BatchStatus };
+}): void {
+  if (doc.batch.status !== BatchStatus.APPROVED && doc.batch.status !== BatchStatus.RELEASED) {
+    throw AppError.conflict("Batch must be QA-approved before AWS data entry");
+  }
+  if (doc.status === DocStatus.PENDING) {
+    throw AppError.conflict("AWS document is not yet open for data entry");
+  }
+}
+
+export function assertAwsBatchReady(section: AwsSectionDetail): void {
+  assertAwsDocumentReady({
+    status: section.batchDocument.status,
+    batch: { status: section.batchDocument.batch.status },
+  });
+}
+
+export async function assertAttachmentRequired(section: AwsSectionDetail): Promise<void> {
+  const config = buildSectionFieldConfig({
+    resultType: section.specDocumentTest.resultType,
+    isOutsideLab: section.specDocumentTest.isOutsideLab,
+    formula: section.specDocumentTest.formula,
+  });
+  if (!config.requiresAttachment) return;
+
+  const count = await countSectionAttachments(section.id);
+  if (count === 0) {
+    throw AppError.validation("Outside-lab section requires a supporting file attachment");
+  }
+}
+
+export function assertOutsideLabReadings(section: AwsSectionDetail): void {
+  const config = buildSectionFieldConfig({
+    resultType: section.specDocumentTest.resultType,
+    isOutsideLab: section.specDocumentTest.isOutsideLab,
+    formula: section.specDocumentTest.formula,
+  });
+  if (config.layout !== "OUTSIDE_LAB") return;
+
+  const readings = parseReadings(section.readings) as {
+    externalReportNo?: string;
+    analysisDate?: string;
+  };
+  if (!readings.externalReportNo?.trim()) {
+    throw AppError.validation("External report number is required for outside-lab sections");
+  }
+  if (!readings.analysisDate?.trim()) {
+    throw AppError.validation("Analysis date is required for outside-lab sections");
+  }
+}
+
 export function assertEditableAwsDocument(section: AwsSectionDetail): void {
+  assertAwsBatchReady(section);
   if (section.batchDocument.docType !== DocType.AWS) {
     throw AppError.notFound("AWS section");
   }
@@ -99,6 +155,18 @@ export function assertAwaitingCheck(section: AwsSectionDetail): void {
   if (section.status !== SectionStatus.AWAITING_CHECK) {
     throw AppError.notAwaitingCheck();
   }
+}
+
+/** Dev-only: allow reject-check on COMPLETE sections for demo autofill rework. */
+export function assertRejectCheckable(section: AwsSectionDetail): void {
+  if (section.status === SectionStatus.AWAITING_CHECK) return;
+  if (
+    process.env.NODE_ENV === "development" &&
+    section.status === SectionStatus.COMPLETE
+  ) {
+    return;
+  }
+  throw AppError.notAwaitingCheck();
 }
 
 export function rejectClientComputedFields(body: Record<string, unknown>): void {

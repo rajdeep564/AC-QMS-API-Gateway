@@ -38,43 +38,15 @@ import {
   signAndIssueCoa,
   transitionDocument,
 } from "../src/modules/documents/documents.service";
+import { findBatchReadySpec } from "../src/modules/specs/specs.service";
 import {
-  approveSpec,
-  createSpec,
-  findBatchReadySpec,
-  signSpec,
-  submitSpec,
-} from "../src/modules/specs/specs.service";
-import { CreateSpecBody } from "../src/modules/specs/specs.schema";
+  DEV_PASSWORD,
+  EXPECTED_TEST_COUNT,
+  cleanupVerifierHarnessData,
+  ensureQaSignedHarnessSpec,
+  ensureVerifierProduct,
+} from "./lib/verifier-harness";
 import { assertBatchLocked } from "../src/modules/batches/batches-guards";
-
-const DEV_PASSWORD = "Acqms@2026";
-
-const SAMPLE_SPEC_BODY: CreateSpecBody = {
-  variant: "GENERAL",
-  tests: [
-    {
-      sortOrder: 1,
-      testName: "Appearance",
-      resultType: "QUALITATIVE",
-      acceptanceCriteria: "White crystalline powder",
-    },
-    {
-      sortOrder: 2,
-      testName: "Assay",
-      resultType: "QUANTITATIVE",
-      operator: "NLT",
-      minValue: 99.0,
-      uom: "%",
-      formula: "result",
-      formulaVariables: { variables: [{ name: "result" }] },
-    },
-  ],
-  moaSections: [
-    { specTestRef: 0, pharmacopoeia: "IP", samplePreparation: "Visual inspection" },
-    { specTestRef: 1, pharmacopoeia: "IP", samplePreparation: "Titrate sample" },
-  ],
-};
 
 function actor(userId: string, role: Role, departmentId: string | null = null): JwtAccessPayload {
   return { userId, role, departmentId };
@@ -98,38 +70,47 @@ async function expectThrows(fn: () => Promise<unknown>, label: string) {
   return null;
 }
 
-async function ensureQaSignedSpec(productId: string, kavyaId: string, priyaId: string, sanjayId: string) {
-  await cleanupSession3Data(productId);
-  await prisma.moaDocSection.deleteMany({
-    where: { moaDoc: { spec: { productId } } },
-  });
-  await prisma.moaDoc.deleteMany({ where: { spec: { productId } } });
-  await prisma.specTest.deleteMany({ where: { spec: { productId } } });
-  await prisma.spec.deleteMany({ where: { productId } });
-
-  const created = await createSpec(productId, SAMPLE_SPEC_BODY, actor(kavyaId, Role.QC_EXEC));
-  await submitSpec(created.id, actor(kavyaId, Role.QC_EXEC));
-  await approveSpec(created.id, DEV_PASSWORD, actor(priyaId, Role.QC_MGR));
-  await signSpec(created.id, DEV_PASSWORD, actor(sanjayId, Role.QA_MGR));
-  const signed = await findBatchReadySpec(productId);
-  if (!signed) throw new Error("Failed to obtain QA_SIGNED spec");
-  return signed;
+function passingReadingsForTest(test: {
+  resultType: string;
+  operator: string | null;
+  minValue: { toString(): string } | null;
+  maxValue: { toString(): string } | null;
+}): Record<string, unknown> {
+  if (test.resultType === "QUALITATIVE") {
+    return { passFail: "PASS" };
+  }
+  const min = test.minValue ? Number(test.minValue.toString()) : null;
+  const max = test.maxValue ? Number(test.maxValue.toString()) : null;
+  if (test.operator === "BETWEEN" && min != null && max != null) {
+    return { variables: { result: (min + max) / 2 } };
+  }
+  if (test.operator === "NMT" && max != null) {
+    return { variables: { result: max * 0.5 } };
+  }
+  if (test.operator === "NLT" && min != null) {
+    return { variables: { result: min * 1.01 } };
+  }
+  return { variables: { result: 1 } };
 }
 
-async function cleanupSession3Data(productId: string) {
-  const batches = await prisma.batch.findMany({ where: { productId }, select: { id: true } });
-  for (const batch of batches) {
-    await prisma.awsSection.deleteMany({
-      where: { batchDocument: { batchId: batch.id } },
-    });
-    await prisma.coaResult.deleteMany({
-      where: { batchDocument: { batchId: batch.id } },
-    });
-    await prisma.batchDocument.deleteMany({ where: { batchId: batch.id } });
-    await prisma.moaDocumentSection.deleteMany({ where: { batchId: batch.id } });
-    await prisma.specDocumentTest.deleteMany({ where: { batchId: batch.id } });
-    await prisma.batch.delete({ where: { id: batch.id } });
-  }
+async function completeAwsSectionPair(
+  sectionId: string,
+  readings: Record<string, unknown>,
+  analystId: string,
+  checkerId: string,
+) {
+  await patchAwsSection(
+    sectionId,
+    { readings },
+    { readings },
+    actor(analystId, Role.QC_EXEC),
+  );
+  await completeAwsSection(sectionId, actor(analystId, Role.QC_EXEC));
+  await checkAwsSection(
+    sectionId,
+    { password: DEV_PASSWORD },
+    actor(checkerId, Role.QC_EXEC),
+  );
 }
 
 function checkNoStandaloneMoaRoutes(): string | null {
@@ -151,6 +132,23 @@ function checkPrismaOnlyInRepositories(): string | null {
     }
   }
   return null;
+}
+
+function runVerifyScript(script: string): string | null {
+  try {
+    execSync(`npm run ${script}`, {
+      cwd: join(__dirname, ".."),
+      stdio: "pipe",
+      encoding: "utf8",
+    });
+    return null;
+  } catch (error) {
+    const err = error as { stdout?: string; stderr?: string; message?: string };
+    const output = [err.stdout, err.stderr].filter(Boolean).join("\n").trim();
+    return output
+      ? `${script} regression failed:\n${output}`
+      : `${script} regression failed${err.message ? `: ${err.message}` : ""}`;
+  }
 }
 
 function report(failures: string[]) {
@@ -178,19 +176,25 @@ async function main() {
   const priya = await getUser("priya.mehta");
   const sanjay = await getUser("sanjay.reddy");
 
-  const glycine = await prisma.product.findFirst({ where: { name: "Glycine" } });
-  if (!glycine) {
-    failures.push("Glycine product not found — run seed first");
-    report(failures);
-    return;
-  }
+  const verifierProduct = await ensureVerifierProduct();
 
-  const signedSpec = await ensureQaSignedSpec(glycine.id, kavya.id, priya.id, sanjay.id);
-  const batchNo = `GLY-S3-${Date.now()}`;
+  const signedSpec = await ensureQaSignedHarnessSpec(
+    verifierProduct.id,
+    kavya.id,
+    priya.id,
+    sanjay.id,
+  );
+  const standingTestCount = await prisma.specTest.count({ where: { specId: signedSpec.id } });
+  if (standingTestCount !== EXPECTED_TEST_COUNT) {
+    failures.push(
+      `Standing SPEC should have ${EXPECTED_TEST_COUNT} tests, found ${standingTestCount}`,
+    );
+  }
+  const batchNo = `VFY-S3-${Date.now()}`;
 
   // 2 — Create batch with snapshot
   const created = await createBatch(
-    glycine.id,
+    verifierProduct.id,
     {
       sourceSpecId: signedSpec.id,
       batchNo,
@@ -201,8 +205,16 @@ async function main() {
   );
 
   if (!created.batch.arnNo) failures.push("Batch missing ARN");
-  if (created.batch.specDocTests.length !== 2) failures.push("Expected 2 snapshot tests");
-  if (created.batch.moaDocSections.length !== 2) failures.push("Expected 2 MOA snapshot sections");
+  if (created.batch.specDocTests.length !== standingTestCount) {
+    failures.push(
+      `Snapshot test count mismatch: batch has ${created.batch.specDocTests.length}, standing SPEC has ${standingTestCount}`,
+    );
+  }
+  if (created.batch.moaDocSections.length !== standingTestCount) {
+    failures.push(
+      `Snapshot MOA section count mismatch: batch has ${created.batch.moaDocSections.length}, standing SPEC has ${standingTestCount}`,
+    );
+  }
   if (created.batch.batchDocuments.length !== 2) failures.push("Expected AWS+COA documents");
 
   const awsPending = created.batch.batchDocuments.find((d) => d.docType === DocType.AWS);
@@ -243,7 +255,7 @@ async function main() {
   }
   await prisma.specTest.updateMany({
     where: { specId: signedSpec.id, testName: "MUTATED-TEST-NAME" },
-    data: { testName: frozenBefore[0] ?? "Appearance" },
+    data: { testName: frozenBefore[0] ?? "Description" },
   });
 
   // 5 — Batch lock + AWS open
@@ -271,16 +283,20 @@ async function main() {
     include: { specDocumentTest: true },
     orderBy: { specDocumentTest: { sortOrder: "asc" } },
   });
-  if (sections.length !== 2) failures.push("Expected 2 AWS sections seeded");
+  if (sections.length !== standingTestCount) {
+    failures.push(`Expected ${standingTestCount} AWS sections seeded, got ${sections.length}`);
+  }
 
-  // 6 — AWS: recompute, reject client fields, two-person, OOS, expiry
-  const appearance = sections[0]!;
-  const assay = sections[1]!;
+  const description =
+    sections.find((s) => s.specDocumentTest.testName === "Description") ?? sections[0]!;
+  const assay =
+    sections.find((s) => s.specDocumentTest.testName === "Assay") ??
+    sections[sections.length - 1]!;
 
   const rejectClientCalc = await expectThrows(
     () =>
       patchAwsSection(
-        appearance.id,
+        description.id,
         { readings: { passFail: "PASS" } },
         { readings: { passFail: "PASS" }, calculatedResult: 99.9 },
         actor(kavya.id, Role.QC_EXEC),
@@ -290,21 +306,28 @@ async function main() {
   if (rejectClientCalc) failures.push(rejectClientCalc);
 
   await patchAwsSection(
-    appearance.id,
+    description.id,
     { readings: { passFail: "PASS" } },
     { readings: { passFail: "PASS" } },
     actor(kavya.id, Role.QC_EXEC),
   );
-  await completeAwsSection(appearance.id, actor(kavya.id, Role.QC_EXEC));
+  await completeAwsSection(description.id, actor(kavya.id, Role.QC_EXEC));
 
   const sameChecker = await expectThrows(
     () =>
-      checkAwsSection(appearance.id, { password: DEV_PASSWORD }, actor(kavya.id, Role.QC_EXEC)),
+      checkAwsSection(description.id, { password: DEV_PASSWORD }, actor(kavya.id, Role.QC_EXEC)),
     "Analyst cannot check own section",
   );
   if (sameChecker) failures.push(sameChecker);
 
-  await checkAwsSection(appearance.id, { password: DEV_PASSWORD }, actor(meera.id, Role.QC_EXEC));
+  await checkAwsSection(description.id, { password: DEV_PASSWORD }, actor(meera.id, Role.QC_EXEC));
+
+  for (const section of sections) {
+    const name = section.specDocumentTest.testName;
+    if (name === "Description" || name === "Assay") continue;
+    const readings = passingReadingsForTest(section.specDocumentTest);
+    await completeAwsSectionPair(section.id, readings, kavya.id, meera.id);
+  }
 
   // OOS on assay
   await patchAwsSection(
@@ -318,7 +341,7 @@ async function main() {
     { readings: { variables: { result: 95.0 } } },
     actor(kavya.id, Role.QC_EXEC),
   );
-  if (!previewOos.isOos) failures.push("Expected OOS for assay below NLT 99");
+  if (!previewOos.isOos) failures.push("Expected OOS for assay below minimum limit");
 
   const oosBlock = await expectThrows(
     () => completeAwsSection(assay.id, actor(kavya.id, Role.QC_EXEC)),
@@ -337,7 +360,9 @@ async function main() {
   const allComplete = await prisma.awsSection.count({
     where: { batchDocumentId: awsDoc!.id, status: SectionStatus.COMPLETE },
   });
-  if (allComplete !== 2) failures.push("All AWS sections should be COMPLETE");
+  if (allComplete !== standingTestCount) {
+    failures.push(`All ${standingTestCount} AWS sections should be COMPLETE, got ${allComplete}`);
+  }
 
   // 7 — AWS sign → COA auto-gen → sign-and-issue → RELEASED
   await transitionDocument(awsDoc!.id, "SUBMIT", actor(kavya.id, Role.QC_EXEC));
@@ -354,7 +379,9 @@ async function main() {
   if (coaDoc?.complianceVerdict !== CoaComplianceVerdict.DOES_NOT_COMPLY) {
     failures.push("COA verdict should be DOES_NOT_COMPLY due to OOS assay");
   }
-  if ((coaDoc?.coaResults.length ?? 0) !== 2) failures.push("COA should have 2 result rows");
+  if ((coaDoc?.coaResults.length ?? 0) !== standingTestCount) {
+    failures.push(`COA should have ${standingTestCount} result rows`);
+  }
 
   await signAndIssueCoa(coaDoc!.id, actor(sanjay.id, Role.QA_MGR), DEV_PASSWORD);
 
@@ -383,19 +410,13 @@ async function main() {
   if (prismaCheck) failures.push(prismaCheck);
 
   // 8 — S1/S2 regression (run as subprocess after cleanup)
-  await cleanupSession3Data(glycine.id);
+  await cleanupVerifierHarnessData(verifierProduct.id);
 
-  try {
-    execSync("npm run verify:session1", { cwd: join(__dirname, ".."), stdio: "pipe" });
-  } catch {
-    failures.push("verify:session1 regression failed");
-  }
+  const session1Failure = runVerifyScript("verify:session1");
+  if (session1Failure) failures.push(session1Failure);
 
-  try {
-    execSync("npm run verify:session2", { cwd: join(__dirname, ".."), stdio: "pipe" });
-  } catch {
-    failures.push("verify:session2 regression failed");
-  }
+  const session2Failure = runVerifyScript("verify:session2");
+  if (session2Failure) failures.push(session2Failure);
 
   report(failures);
 }

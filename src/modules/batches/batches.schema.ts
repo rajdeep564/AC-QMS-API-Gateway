@@ -13,7 +13,6 @@ export const createBatchBodySchema = z.object({
   sourceSpecId: z.string().uuid(),
   batchNo: z.string().min(1),
   mfgDate: z.coerce.date().optional(),
-  expDate: z.coerce.date().optional(),
   batchSize: z.string().optional(),
   assignedQcExecId: z.string().uuid(),
 });

@@ -46,7 +46,14 @@ export type AwsSectionDetail = Prisma.AwsSectionGetPayload<{
 export async function findAwsDocumentById(awsDocId: string, client: Db = prisma) {
   return client.batchDocument.findUnique({
     where: { id: awsDocId },
-    select: { id: true, docType: true, status: true, docNo: true, batchId: true },
+    select: {
+      id: true,
+      docType: true,
+      status: true,
+      docNo: true,
+      batchId: true,
+      batch: { select: { status: true } },
+    },
   });
 }
 

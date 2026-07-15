@@ -2,6 +2,7 @@ import "dotenv/config";
 import { MasterStatus, Role } from "@prisma/client";
 import { prisma } from "../src/lib/prisma-types";
 import { getMasterAllowedActions } from "../src/services/master-workflow.service";
+import { GLYCINE_MASTER_FIELD_COUNT } from "./lib/glycine-baseline";
 
 /** Rev 2.3 application tables (Bible Part 2 list; headline "22" omits users + departments). */
 const EXPECTED_TABLES = [
@@ -30,8 +31,6 @@ const EXPECTED_TABLES = [
   "sessions",
   "arn_sequences",
 ] as const;
-
-const EXPECTED_FIELD_COUNT = 18;
 
 async function listApplicationTables(): Promise<string[]> {
   const rows = await prisma.$queryRaw<{ table_name: string }[]>`
@@ -87,6 +86,7 @@ async function main() {
   const activeMaster = glycine
     ? await prisma.productMaster.findFirst({
         where: { productId: glycine.id, status: MasterStatus.ACTIVE },
+        orderBy: { revisionNo: "desc" },
         include: { fields: true },
       })
     : null;
@@ -94,16 +94,24 @@ async function main() {
   if (!activeMaster) {
     failures.push("No ACTIVE Glycine product master");
   } else {
-    if (activeMaster.revisionNo !== 1) {
-      failures.push(`Expected master revision 1, got ${activeMaster.revisionNo}`);
-    }
-    if (activeMaster.fields.length !== EXPECTED_FIELD_COUNT) {
+    const activeMasterCount = await prisma.productMaster.count({
+      where: { productId: glycine!.id, status: MasterStatus.ACTIVE },
+    });
+    if (activeMasterCount !== 1) {
       failures.push(
-        `Expected ${EXPECTED_FIELD_COUNT} EAV fields, got ${activeMaster.fields.length}`,
+        `Expected exactly 1 ACTIVE Glycine master, found ${activeMasterCount}`,
+      );
+    }
+    if (activeMaster.revisionNo < 1) {
+      failures.push(`ACTIVE master revision must be >= 1, got ${activeMaster.revisionNo}`);
+    }
+    if (activeMaster.fields.length !== GLYCINE_MASTER_FIELD_COUNT) {
+      failures.push(
+        `Expected ${GLYCINE_MASTER_FIELD_COUNT} EAV fields, got ${activeMaster.fields.length}`,
       );
     }
     if (rajesh && activeMaster.createdById !== rajesh.id) {
-      failures.push("Master was not created by Rajesh");
+      failures.push("ACTIVE master was not created by Rajesh");
     }
   }
 
@@ -138,6 +146,7 @@ async function main() {
   console.log("Session 1 verification PASSED");
   console.log(`  Tables: ${tableNames.length}`);
   console.log(`  Users: ${userCount}`);
+  console.log(`  Glycine ACTIVE master revision: ${activeMaster?.revisionNo}`);
   console.log(`  Glycine master fields: ${activeMaster?.fields.length}`);
 }
 

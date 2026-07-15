@@ -1,19 +1,35 @@
+/** Frontend app routes (Next.js) — keep in sync with AC-QMS-Frontend-Next routes. */
+
 export function batchLink(batchId: string): string {
-  return `/qc/batches/${batchId}`;
+  return `/batches/${batchId}`;
 }
 
-export function documentLink(batchId: string, documentId: string): string {
-  return `/qc/batches/${batchId}/documents/${documentId}`;
+export function awsDocumentLink(documentId: string): string {
+  return `/documents/aws/${documentId}`;
+}
+
+export function coaDocumentLink(documentId: string): string {
+  return `/documents/coa/${documentId}`;
 }
 
 export function masterLink(masterId: string): string {
-  return `/qc/masters/${masterId}`;
-}
-
-export function specTemplateLink(templateId: string): string {
-  return `/qc/spec-templates/${templateId}`;
+  return `/product-masters/${masterId}`;
 }
 
 export function standingSpecLink(specId: string): string {
-  return `/qc/specs/${specId}`;
+  return `/specs/${specId}`;
+}
+
+/** @deprecated Use awsDocumentLink or coaDocumentLink */
+export function documentLink(
+  _batchId: string,
+  documentId: string,
+  docType: "AWS" | "COA" = "AWS",
+): string {
+  return docType === "COA" ? coaDocumentLink(documentId) : awsDocumentLink(documentId);
+}
+
+/** @deprecated Removed in Rev 2.3 — retained for excluded legacy modules only */
+export function specTemplateLink(templateId: string): string {
+  return `/specs/${templateId}`;
 }

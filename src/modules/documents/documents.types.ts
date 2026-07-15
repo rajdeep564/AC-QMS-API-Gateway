@@ -11,6 +11,19 @@ export type CoaResultDto = {
   sortOrder: number;
 };
 
+export type AwsApprovalQueueItemDto = {
+  id: string;
+  docNo: string;
+  batchId: string;
+  batchNo: string;
+  productId: string;
+  productName: string;
+  assignedQcExecName: string | null;
+  submittedBy: { username: string; fullName: string } | null;
+  submittedAt: Date;
+  status: DocStatus;
+};
+
 export type DocumentDetailDto = {
   id: string;
   batchId: string;

@@ -15,7 +15,7 @@ import {
 } from "../../services/workflow.config";
 import { verifyUserPassword } from "../auth/auth.service";
 import { toDocumentDetail } from "./documents.mapper";
-import { DocumentAllowedAction, DocumentDetailDto } from "./documents.types";
+import { AwsApprovalQueueItemDto, DocumentAllowedAction, DocumentDetailDto } from "./documents.types";
 import * as documentsRepo from "./documents.repository";
 
 function resolveEntityTypeOrThrow(docType: DocType) {
@@ -54,6 +54,31 @@ export async function getDocumentDetail(
         : [];
 
   return toDocumentDetail(doc, allowedActions);
+}
+
+/** US-12-15 — QC Manager queue for SUBMITTED AWS documents. */
+export async function listAwsApprovalQueue(
+  actor: JwtAccessPayload,
+): Promise<AwsApprovalQueueItemDto[]> {
+  if (actor.role !== Role.QC_MGR && actor.role !== Role.SADMIN) {
+    throw AppError.forbidden("Only QC Manager can view the AWS approval queue");
+  }
+
+  const docs = await documentsRepo.listSubmittedAwsForQcApproval();
+  return docs.map((doc) => ({
+    id: doc.id,
+    docNo: doc.docNo,
+    batchId: doc.batch.id,
+    batchNo: doc.batch.batchNo,
+    productId: doc.batch.productId,
+    productName: doc.batch.product.name,
+    assignedQcExecName: doc.batch.assignedQcExec?.fullName ?? null,
+    submittedBy: doc.submittedBy
+      ? { username: doc.submittedBy.username, fullName: doc.submittedBy.fullName }
+      : null,
+    submittedAt: doc.createdAt,
+    status: doc.status,
+  }));
 }
 
 export async function transitionDocument(

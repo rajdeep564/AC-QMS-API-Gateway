@@ -83,6 +83,37 @@ export async function listSpecsByProduct(
   });
 }
 
+export async function listSubmittedSpecsForQcApproval(
+  excludeCreatedByUserId?: string,
+  client: Db = prisma,
+) {
+  return client.spec.findMany({
+    where: {
+      status: StandingDocStatus.SUBMITTED,
+      ...(excludeCreatedByUserId ? { createdById: { not: excludeCreatedByUserId } } : {}),
+    },
+    orderBy: { createdAt: "desc" },
+    include: {
+      product: { select: { id: true, name: true } },
+      submittedBy: { select: { username: true, fullName: true } },
+      createdBy: { select: { username: true, fullName: true } },
+      moaDoc: { select: { moaNo: true } },
+    },
+  });
+}
+
+export async function listQcApprovedSpecsForQaSignature(client: Db = prisma) {
+  return client.spec.findMany({
+    where: { status: StandingDocStatus.QC_APPROVED },
+    orderBy: [{ approvedAt: "desc" }, { createdAt: "desc" }],
+    include: {
+      product: { select: { id: true, name: true } },
+      qcApprovedBy: { select: { username: true, fullName: true } },
+      moaDoc: { select: { moaNo: true } },
+    },
+  });
+}
+
 export async function aggregateRevisionNo(
   productId: string,
   variant: SpecVariant,

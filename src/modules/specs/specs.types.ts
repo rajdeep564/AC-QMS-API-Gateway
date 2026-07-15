@@ -56,6 +56,35 @@ export type SpecListItemDto = {
   hasMoa: boolean;
 };
 
+export type SpecApprovalQueueSubmitterDto = {
+  username: string;
+  fullName: string;
+};
+
+export type SpecApprovalQueueItemDto = {
+  id: string;
+  specNo: string;
+  moaNo: string | null;
+  revisionNo: number;
+  productId: string;
+  productName: string;
+  status: StandingDocStatus;
+  submittedBy: SpecApprovalQueueSubmitterDto | null;
+  submittedAt: Date;
+};
+
+export type SpecSignatureQueueItemDto = {
+  id: string;
+  specNo: string;
+  moaNo: string | null;
+  revisionNo: number;
+  productId: string;
+  productName: string;
+  status: StandingDocStatus;
+  qcApprovedBy: SpecApprovalQueueSubmitterDto | null;
+  approvedAt: Date;
+};
+
 export type SpecDetailDto = {
   id: string;
   productId: string;

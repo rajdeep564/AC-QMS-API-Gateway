@@ -8,6 +8,8 @@ import {
   approveSpec,
   createSpec,
   getSpecDetail,
+  listSpecApprovalQueue,
+  listSpecSignatureQueue,
   listSpecsForProduct,
   patchSpec,
   rejectSpec,
@@ -21,6 +23,16 @@ export const listForProduct = asyncHandler(async (req: AuthenticatedRequest, res
   const query = req.query as ListSpecsQuery;
   const specs = await listSpecsForProduct(productId ?? id, query);
   res.json(ok(specs));
+});
+
+export const listApprovalQueue = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const queue = await listSpecApprovalQueue(req.user);
+  res.json(ok(queue));
+});
+
+export const listSignatureQueue = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const queue = await listSpecSignatureQueue(req.user);
+  res.json(ok(queue));
 });
 
 export const create = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {

@@ -9,11 +9,14 @@ import {
   acknowledgeOos,
   checkSection,
   completeSection,
+  deleteAttachment,
   getSectionById,
+  listAttachments,
   listSections,
   patchSection,
   previewSection,
   rejectCheckSection,
+  uploadAttachment,
 } from "./aws.controller";
 import {
   acknowledgeExpiredBodySchema,
@@ -21,6 +24,7 @@ import {
   patchAwsSectionBodySchema,
   previewAwsSectionBodySchema,
   rejectCheckBodySchema,
+  uploadAttachmentBodySchema,
 } from "./aws.schema";
 
 const awsDocRouter = Router();
@@ -76,6 +80,20 @@ awsSectionRouter.post(
   requireRole(Role.QC_EXEC),
   validate(rejectCheckBodySchema),
   rejectCheckSection,
+);
+awsSectionRouter.get("/:id/attachments", requireAuth, listAttachments);
+awsSectionRouter.post(
+  "/:id/attachments",
+  requireAuth,
+  requireRole(Role.QC_EXEC),
+  validate(uploadAttachmentBodySchema),
+  uploadAttachment,
+);
+awsSectionRouter.delete(
+  "/:id/attachments/:attachmentId",
+  requireAuth,
+  requireRole(Role.QC_EXEC),
+  deleteAttachment,
 );
 
 export { awsDocRouter, awsSectionRouter };

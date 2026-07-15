@@ -423,6 +423,7 @@ model SpecDocumentTest {
   acceptanceCriteria String?    @map("acceptance_criteria")
   formula            String?
   sortOrder          Int        @map("sort_order")
+  isOutsideLab       Boolean    @default(false) @map("is_outside_lab")
   createdAt          DateTime   @default(now()) @map("created_at") @db.Timestamptz
 
   batch          Batch                @relation(fields: [batchId], references: [id])

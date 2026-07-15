@@ -8,6 +8,7 @@ import {
   approveBatch,
   createBatch as createBatchService,
   getBatchById,
+  listBatchReadyProducts,
   listBatches,
   rejectBatch,
   submitBatch,
@@ -17,6 +18,11 @@ export const list = asyncHandler(async (req: AuthenticatedRequest, res: Response
   const query = req.query as unknown as ListBatchesQuery;
   const result = await listBatches(query);
   res.json(paginated(result.items, result.total, result.page, result.limit));
+});
+
+export const listBatchReady = asyncHandler(async (_req: AuthenticatedRequest, res: Response) => {
+  const items = await listBatchReadyProducts();
+  res.json(ok(items));
 });
 
 export const create = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {

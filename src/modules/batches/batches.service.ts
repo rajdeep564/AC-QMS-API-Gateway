@@ -4,6 +4,8 @@ import { AppError } from "../../lib/app-error";
 import { JwtAccessPayload } from "../../types/auth.types";
 import { AuditAction, AuditEntityType, log as auditLog } from "../../services/audit.service";
 import { parsePagination } from "../../utils/pagination";
+import { expDateFromMfgDate } from "../../utils/dates";
+import { getProductCode, parseShelfLifeMonths } from "../../utils/master-fields";
 import { batchLink } from "../../services/notification-links";
 import { notify } from "../../services/notification.service";
 import { getAllowedBatchActions } from "../../services/workflow-engine";
@@ -16,6 +18,7 @@ import {
   BatchDetailDto,
   BatchDocumentDto,
   BatchListItemDto,
+  BatchReadyProductDto,
   CreateBatchResultDto,
   MoaDocumentSectionDto,
   SpecDocumentTestDto,
@@ -50,6 +53,7 @@ function toSpecTestDto(test: BatchWithDetails["specDocTests"][number]): SpecDocu
     acceptanceCriteria: test.acceptanceCriteria,
     formula: test.formula,
     sortOrder: test.sortOrder,
+    isOutsideLab: test.isOutsideLab,
   };
 }
 
@@ -101,17 +105,24 @@ function toBatchDetail(batch: BatchWithDetails, actor: JwtAccessPayload): BatchD
   };
 }
 
-async function getProductCodeFromActiveMaster(productId: string): Promise<string> {
+async function getActiveMasterContext(productId: string) {
   const master = await mastersRepo.findActiveMasterForProduct(productId);
   if (!master) {
     throw AppError.conflict("An ACTIVE Product Master is required before batch creation");
   }
   const masterWithFields = await mastersRepo.findMasterWithFields(master.id);
-  const productCode = masterWithFields?.fields.find((f) => f.fieldKey === "product_code")?.value;
-  if (!productCode) {
-    throw AppError.conflict("ACTIVE master is missing product_code field");
+  if (!masterWithFields) {
+    throw AppError.conflict("An ACTIVE Product Master is required before batch creation");
   }
-  return productCode;
+  return {
+    productCode: getProductCode(masterWithFields.fields),
+    shelfLifeMonths: parseShelfLifeMonths(masterWithFields.fields),
+  };
+}
+
+function resolveBatchExpDate(mfgDate: Date | undefined, shelfLifeMonths: number): Date | undefined {
+  if (!mfgDate) return undefined;
+  return expDateFromMfgDate(mfgDate, shelfLifeMonths);
 }
 
 async function validateAssignee(assignedQcExecId: string): Promise<void> {
@@ -183,6 +194,37 @@ export async function listBatches(query: ListBatchesQuery) {
   return { items: mapped, total, page, limit };
 }
 
+export async function listBatchReadyProducts(): Promise<BatchReadyProductDto[]> {
+  const products = await prisma.product.findMany({ orderBy: { name: "asc" } });
+  const ready: BatchReadyProductDto[] = [];
+
+  for (const product of products) {
+    const master = await mastersRepo.findActiveMasterForProduct(product.id);
+    if (!master) continue;
+
+    const spec = await specsRepo.findBatchReadySpec(product.id, SpecVariant.GENERAL);
+    if (!spec) continue;
+
+    const masterWithFields = await mastersRepo.findMasterWithFields(master.id);
+    if (!masterWithFields) continue;
+
+    try {
+      ready.push({
+        productId: product.id,
+        productName: product.name,
+        sourceSpecId: spec.id,
+        specNo: spec.specNo,
+        revisionNo: spec.revisionNo,
+        shelfLifeMonths: parseShelfLifeMonths(masterWithFields.fields),
+      });
+    } catch {
+      // Skip products whose ACTIVE master lacks shelf-life metadata.
+    }
+  }
+
+  return ready;
+}
+
 export async function createBatch(
   productId: string,
   body: CreateBatchBody,
@@ -220,6 +262,7 @@ export async function createBatch(
     acceptanceCriteria: test.acceptanceCriteria,
     formula: test.formula,
     sortOrder: test.sortOrder,
+    isOutsideLab: test.isOutsideLab,
   }));
 
   const testIdBySpecTestId = new Map(spec.specTests.map((t) => [t.id, t.id]));
@@ -234,7 +277,8 @@ export async function createBatch(
 
   const actorUser = await getUserById(actor.userId);
   const assigneeName = await getAssigneeName(body.assignedQcExecId);
-  const productCode = await getProductCodeFromActiveMaster(productId);
+  const { productCode, shelfLifeMonths } = await getActiveMasterContext(productId);
+  const expDate = resolveBatchExpDate(body.mfgDate, shelfLifeMonths);
 
   const batch = await prisma.$transaction(async (tx) => {
     const created = await batchesRepo.createBatchWithSnapshot(
@@ -246,7 +290,7 @@ export async function createBatch(
         createdById: actor.userId,
         assignedQcExecId: body.assignedQcExecId,
         mfgDate: body.mfgDate,
-        expDate: body.expDate,
+        expDate,
         batchSize: body.batchSize,
       },
       specTests,

@@ -14,6 +14,23 @@ export type FormulaConfigDto = {
   formula: string | null;
 };
 
+export type SectionFieldConfigDto = {
+  layout: "IN_HOUSE" | "OUTSIDE_LAB";
+  showInstrument: boolean;
+  showReagent: boolean;
+  showFormulaInputs: boolean;
+  showQualitativePassFail: boolean;
+  showFileUpload: boolean;
+  requiresAttachment: boolean;
+};
+
+export type AwsAttachmentDto = {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  createdAt: string;
+};
+
 export type UserRefDto = {
   id: string;
   fullName: string;
@@ -49,6 +66,9 @@ export type AwsSectionListItemDto = {
   checker: UserRefDto;
   /** Advisory UI hints — enforcement remains in aws-guards (Epic 12 / US-12-x). */
   allowedActions: string[];
+  sectionFieldConfig: SectionFieldConfigDto;
+  procedureSnapshot: string | null;
+  attachmentCount: number;
 };
 
 export type AwsSectionDetailDto = AwsSectionListItemDto & {

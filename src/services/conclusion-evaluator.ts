@@ -34,16 +34,17 @@ export function evaluateQuantitativeConclusion(
 
   switch (limits.operator) {
     case Operator.BETWEEN:
-      satisfactory = min !== null && max !== null && result >= min && result <= max;
+      satisfactory =
+        (min === null || result >= min) && (max === null || result <= max);
       break;
     case Operator.NMT:
-      satisfactory = max !== null && result <= max;
+      satisfactory = max === null || result <= max;
       break;
     case Operator.NLT:
-      satisfactory = min !== null && result >= min;
+      satisfactory = min === null || result >= min;
       break;
     default:
-      satisfactory = false;
+      satisfactory = true;
   }
 
   const conclusion = satisfactory ? Conclusion.SATISFACTORY : Conclusion.NOT_SATISFACTORY;

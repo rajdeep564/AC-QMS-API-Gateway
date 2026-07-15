@@ -1,7 +1,7 @@
 import "dotenv/config";
 import bcrypt from "bcrypt";
-import { DeptName, MasterStatus, PrismaClient, Role } from "@prisma/client";
-import { GLYCINE_MASTER_FIELDS } from "../src/fixtures/glycine-master-fields";
+import { DeptName, PrismaClient, Role } from "@prisma/client";
+import { ensureGlycineMasterBaseline } from "../scripts/lib/glycine-baseline";
 
 const prisma = new PrismaClient();
 
@@ -92,47 +92,8 @@ async function seedUsers(deptMap: Map<DeptName, string>, passwordHash: string) {
 }
 
 async function seedGlycineProduct(rajeshId: string) {
-  let product = await prisma.product.findFirst({ where: { name: "Glycine" } });
-  if (!product) {
-    product = await prisma.product.create({ data: { name: "Glycine" } });
-  }
-
-  const existingMaster = await prisma.productMaster.findFirst({
-    where: { productId: product.id, revisionNo: 1 },
-  });
-
-  if (existingMaster) {
-    await prisma.productMasterField.deleteMany({
-      where: { productMasterId: existingMaster.id },
-    });
-    await prisma.productMaster.delete({ where: { id: existingMaster.id } });
-  }
-
-  const now = new Date();
-
-  await prisma.productMaster.create({
-    data: {
-      productId: product.id,
-      revisionNo: 1,
-      status: MasterStatus.ACTIVE,
-      effectiveDate: now,
-      createdById: rajeshId,
-      approvedById: rajeshId,
-      approvedAt: now,
-      fields: {
-        create: GLYCINE_MASTER_FIELDS.map((f) => ({
-          fieldKey: f.fieldKey,
-          label: f.label,
-          value: f.value,
-          dataType: f.dataType,
-          sortOrder: f.sortOrder,
-          isRequired: f.isRequired,
-        })),
-      },
-    },
-  });
-
-  return product;
+  const { productId } = await ensureGlycineMasterBaseline(prisma, rajeshId);
+  return prisma.product.findUniqueOrThrow({ where: { id: productId } });
 }
 
 async function seedReferenceMasters() {

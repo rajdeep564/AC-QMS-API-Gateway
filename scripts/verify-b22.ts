@@ -36,7 +36,12 @@ import { renderDocuments } from "../src/services/render-documents.service";
 import { postRender } from "../src/services/sop-client";
 import { JwtAccessPayload } from "../src/types/auth.types";
 
-const DEV_PASSWORD = "Acqms@2026";
+import {
+  DEV_PASSWORD,
+  ensureQaSignedHarnessSpec,
+  ensureVerifierActiveMaster,
+  ensureVerifierProduct,
+} from "./lib/verifier-harness";
 const DOC_MODULE_URL = process.env.DOC_MODULE_URL ?? "http://localhost:8000";
 const DOC_MODULE_API_KEY = process.env.DOC_MODULE_API_KEY ?? "";
 
@@ -141,8 +146,8 @@ async function completeSectionTwoPerson(
 }
 
 async function createCoaReadyFixture(batchNoSuffix: string) {
-  const glycine = await prisma.product.findFirst({ where: { name: "Glycine" } });
-  if (!glycine) throw new Error("Glycine product must be seeded");
+  const verifierProduct = await ensureVerifierProduct();
+  await ensureVerifierActiveMaster((await getUser("kavya.patel")).id);
 
   const kavya = await getUser("kavya.patel");
   const meera = await getUser("meera.iyer");
@@ -150,9 +155,15 @@ async function createCoaReadyFixture(batchNoSuffix: string) {
   const sanjay = await getUser("sanjay.reddy");
 
   const batchNo = `B22-${batchNoSuffix}`;
-  const signedSpec = await ensureQaSignedSpec(glycine.id, kavya.id, priya.id, sanjay.id);
+  const signedSpec = await ensureQaSignedHarnessSpec(
+    verifierProduct.id,
+    kavya.id,
+    priya.id,
+    sanjay.id,
+    SAMPLE_SPEC_BODY,
+  );
   const created = await createBatch(
-    glycine.id,
+    verifierProduct.id,
     {
       sourceSpecId: signedSpec.id,
       batchNo,

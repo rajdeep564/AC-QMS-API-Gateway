@@ -15,33 +15,15 @@ import {
   signSpec,
   submitSpec,
 } from "../src/modules/specs/specs.service";
-import { CreateSpecBody } from "../src/modules/specs/specs.schema";
-
-const DEV_PASSWORD = "Acqms@2026";
-
-const SAMPLE_SPEC_BODY: CreateSpecBody = {
-  variant: "GENERAL",
-  tests: [
-    {
-      sortOrder: 1,
-      testName: "Appearance",
-      resultType: "QUALITATIVE",
-      acceptanceCriteria: "White crystalline powder",
-    },
-    {
-      sortOrder: 2,
-      testName: "Assay",
-      resultType: "QUANTITATIVE",
-      operator: "NLT",
-      minValue: 99.0,
-      uom: "%",
-    },
-  ],
-  moaSections: [
-    { specTestRef: 0, pharmacopoeia: "IP", samplePreparation: "Dissolve sample in water" },
-    { specTestRef: 1, pharmacopoeia: "IP", samplePreparation: "Titrate against perchloric acid" },
-  ],
-};
+import {
+  DEV_PASSWORD,
+  EXPECTED_TEST_COUNT,
+  SAMPLE_SPEC_BODY,
+  cleanupVerifierHarnessData,
+  ensureVerifierActiveMaster,
+  ensureVerifierProduct,
+  resetVerifierStandingSpecs,
+} from "./lib/verifier-harness";
 
 function actor(userId: string, role: Role, departmentId: string | null = null): JwtAccessPayload {
   return { userId, role, departmentId };
@@ -83,41 +65,15 @@ async function main() {
   const priya = await getUser("priya.mehta");
   const sanjay = await getUser("sanjay.reddy");
 
-  const glycine = await prisma.product.findFirst({ where: { name: "Glycine" } });
-  if (!glycine) {
-    failures.push("Glycine product not found — run seed first");
-    report(failures);
-    return;
-  }
+  const verifierProduct = await ensureVerifierProduct();
+  await ensureVerifierActiveMaster(kavya.id);
 
-  // Clean prior session-2/3 data for repeatable runs (batches FK → specs)
-  const glycineBatches = await prisma.batch.findMany({
-    where: { productId: glycine.id },
-    select: { id: true },
-  });
-  for (const batch of glycineBatches) {
-    await prisma.awsSection.deleteMany({
-      where: { batchDocument: { batchId: batch.id } },
-    });
-    await prisma.coaResult.deleteMany({
-      where: { batchDocument: { batchId: batch.id } },
-    });
-    await prisma.batchDocument.deleteMany({ where: { batchId: batch.id } });
-    await prisma.moaDocumentSection.deleteMany({ where: { batchId: batch.id } });
-    await prisma.specDocumentTest.deleteMany({ where: { batchId: batch.id } });
-    await prisma.batch.delete({ where: { id: batch.id } });
-  }
-
-  await prisma.moaDocSection.deleteMany({
-    where: { moaDoc: { spec: { productId: glycine.id } } },
-  });
-  await prisma.moaDoc.deleteMany({ where: { spec: { productId: glycine.id } } });
-  await prisma.specTest.deleteMany({ where: { spec: { productId: glycine.id } } });
-  await prisma.spec.deleteMany({ where: { productId: glycine.id } });
+  await cleanupVerifierHarnessData(verifierProduct.id);
+  await resetVerifierStandingSpecs(verifierProduct.id);
 
   // 2 — Author SPEC+MOA
   const created = await createSpec(
-    glycine.id,
+    verifierProduct.id,
     SAMPLE_SPEC_BODY,
     actor(kavya.id, Role.QC_EXEC, kavya.departmentId),
   );
@@ -125,8 +81,10 @@ async function main() {
   if (created.status !== StandingDocStatus.DRAFT) {
     failures.push(`Expected DRAFT after create, got ${created.status}`);
   }
-  if (created.tests.length !== 2 || !created.moa || created.moa.sections.length !== 2) {
-    failures.push("SPEC+MOA pair not created with expected tests/sections");
+  if (created.tests.length !== EXPECTED_TEST_COUNT || !created.moa || created.moa.sections.length !== EXPECTED_TEST_COUNT) {
+    failures.push(
+      `SPEC+MOA pair not created with expected ${EXPECTED_TEST_COUNT} tests/sections (got ${created.tests.length}/${created.moa?.sections.length ?? 0})`,
+    );
   }
 
   const createAudit = await prisma.auditLog.findFirst({
@@ -232,7 +190,7 @@ async function main() {
     failures.push("renderDocuments stub did not write GENERATE audit");
   }
 
-  const batchReady = await findBatchReadySpec(glycine.id);
+  const batchReady = await findBatchReadySpec(verifierProduct.id);
   if (!batchReady || batchReady.id !== created.id) {
     failures.push("findBatchReadySpec should return signed SPEC after first sign");
   }
@@ -244,7 +202,7 @@ async function main() {
   // 11 — Revise DRAFT → 409
   const draftSpec = await prisma.spec.create({
     data: {
-      productId: glycine.id,
+      productId: verifierProduct.id,
       variant: "GENERAL",
       specNo: "SPEC/TEST/99",
       revisionNo: 99,
@@ -270,8 +228,8 @@ async function main() {
   if (revision.supersedesId !== created.id) {
     failures.push("Revise: supersedes_id not set");
   }
-  if (revision.tests.length !== 2 || !revision.moa || revision.moa.sections.length !== 2) {
-    failures.push("Revise: tests/MOA not copied");
+  if (revision.tests.length !== EXPECTED_TEST_COUNT || !revision.moa || revision.moa.sections.length !== EXPECTED_TEST_COUNT) {
+    failures.push(`Revise: expected ${EXPECTED_TEST_COUNT} tests/MOA sections copied`);
   }
 
   const sourceAfterRevise = await prisma.spec.findUnique({ where: { id: created.id } });
@@ -280,7 +238,7 @@ async function main() {
   }
 
   // 15 — No-gap: batch-ready still prior signed spec
-  const batchReadyDuringGap = await findBatchReadySpec(glycine.id);
+  const batchReadyDuringGap = await findBatchReadySpec(verifierProduct.id);
   if (!batchReadyDuringGap || batchReadyDuringGap.id !== created.id) {
     failures.push("No-gap: batch-ready should still be prior signed SPEC before new revision signs");
   }
@@ -318,7 +276,7 @@ async function main() {
 
   const qaSignedCount = await prisma.spec.count({
     where: {
-      productId: glycine.id,
+      productId: verifierProduct.id,
       variant: "GENERAL",
       status: StandingDocStatus.QA_SIGNED,
     },
@@ -327,7 +285,7 @@ async function main() {
     failures.push(`Expected exactly 1 QA_SIGNED spec, found ${qaSignedCount}`);
   }
 
-  const batchReadyAfter = await findBatchReadySpec(glycine.id);
+  const batchReadyAfter = await findBatchReadySpec(verifierProduct.id);
   if (!batchReadyAfter || batchReadyAfter.id !== revision.id) {
     failures.push("After sign, batch-ready should be new revision");
   }

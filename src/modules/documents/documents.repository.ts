@@ -1,4 +1,4 @@
-import { Prisma } from "@prisma/client";
+import { DocStatus, DocType, Prisma, Role } from "@prisma/client";
 import { Db, prisma } from "../../lib/prisma-types";
 
 const documentDetailInclude = {
@@ -27,5 +27,25 @@ export async function findDocumentDetail(documentId: string, client: Db = prisma
   return client.batchDocument.findUnique({
     where: { id: documentId },
     include: documentDetailInclude,
+  });
+}
+
+export async function listSubmittedAwsForQcApproval(client: Db = prisma) {
+  return client.batchDocument.findMany({
+    where: { docType: DocType.AWS, status: DocStatus.SUBMITTED },
+    orderBy: { createdAt: "desc" },
+    include: {
+      batch: {
+        select: {
+          id: true,
+          batchNo: true,
+          productId: true,
+          assignedQcExecId: true,
+          product: { select: { id: true, name: true } },
+          assignedQcExec: { select: { fullName: true } },
+        },
+      },
+      submittedBy: { select: { username: true, fullName: true } },
+    },
   });
 }

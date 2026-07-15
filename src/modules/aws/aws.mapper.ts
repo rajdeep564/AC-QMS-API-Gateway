@@ -6,6 +6,7 @@ import {
 } from "../../services/aws-expiry.service";
 import { JwtAccessPayload } from "../../types/auth.types";
 import { getAllowedAwsSectionActions } from "./aws-allowed-actions";
+import { buildSectionFieldConfig } from "./aws-field-config";
 import { AwsSectionDetail } from "./aws.repository";
 import {
   AwsSectionDetailDto,
@@ -69,9 +70,18 @@ function expiryAckFields(readings: unknown) {
 export function toAwsSectionListItem(
   section: AwsSectionDetail,
   allowedActions: string[] = [],
+  extras: {
+    procedureSnapshot?: string | null;
+    attachmentCount?: number;
+  } = {},
 ): AwsSectionListItemDto {
   const limits = toResolvedLimits(section);
   const acks = expiryAckFields(section.readings);
+  const sectionFieldConfig = buildSectionFieldConfig({
+    resultType: section.specDocumentTest.resultType,
+    isOutsideLab: section.specDocumentTest.isOutsideLab,
+    formula: section.specDocumentTest.formula,
+  });
   return {
     id: section.id,
     batchDocumentId: section.batchDocumentId,
@@ -105,16 +115,36 @@ export function toAwsSectionListItem(
       ? { id: section.checker.id, fullName: section.checker.fullName }
       : null,
     allowedActions,
+    sectionFieldConfig,
+    procedureSnapshot: extras.procedureSnapshot ?? null,
+    attachmentCount: extras.attachmentCount ?? 0,
   };
+}
+
+export async function toAwsSectionListItemWithCounts(
+  section: AwsSectionDetail,
+  allowedActions: string[] = [],
+  procedureSnapshot: string | null = null,
+): Promise<AwsSectionListItemDto> {
+  const { countSectionAttachments } = await import("./aws-attachments.service");
+  const attachmentCount = await countSectionAttachments(section.id);
+  return toAwsSectionListItem(section, allowedActions, {
+    procedureSnapshot,
+    attachmentCount,
+  });
 }
 
 export function toAwsSectionDetail(
   section: AwsSectionDetail,
   actor: JwtAccessPayload,
+  extras: {
+    procedureSnapshot?: string | null;
+    attachmentCount?: number;
+  } = {},
 ): AwsSectionDetailDto {
   const allowedActions = getAllowedAwsSectionActions(section, actor);
   return {
-    ...toAwsSectionListItem(section, allowedActions),
+    ...toAwsSectionListItem(section, allowedActions, extras),
     formula: toFormulaConfig(section),
     batchId: section.batchDocument.batchId,
     awsDocNo: section.batchDocument.docNo,
@@ -123,16 +153,21 @@ export function toAwsSectionDetail(
   };
 }
 
-export function toAwsSectionsListResponse(
+export async function toAwsSectionsListResponse(
   sections: AwsSectionDetail[],
   actor: JwtAccessPayload,
-): AwsSectionsListResponseDto {
+  moaByTestId: Map<string, string | null>,
+): Promise<AwsSectionsListResponseDto> {
   const summary = emptyStatusSummary();
-  const mapped = sections.map((section) => {
-    summary[section.status] += 1;
-    const allowedActions = getAllowedAwsSectionActions(section, actor);
-    return toAwsSectionListItem(section, allowedActions);
-  });
+  const mapped = await Promise.all(
+    sections.map(async (section) => {
+      summary[section.status] += 1;
+      const allowedActions = getAllowedAwsSectionActions(section, actor);
+      const procedureSnapshot =
+        moaByTestId.get(section.specDocumentTestId) ?? null;
+      return toAwsSectionListItemWithCounts(section, allowedActions, procedureSnapshot);
+    }),
+  );
 
   return {
     sections: mapped,

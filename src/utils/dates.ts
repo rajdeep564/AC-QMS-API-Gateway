@@ -1,4 +1,4 @@
-import { addMonths as dateFnsAddMonths, endOfMonth } from "date-fns";
+import { addMonths as dateFnsAddMonths, endOfMonth, subMonths } from "date-fns";
 
 /**
  * Add months to a date (calendar-aware via date-fns).
@@ -32,15 +32,16 @@ export function getFinancialYearStartYear(date: Date = new Date()): number {
 }
 
 /**
- * Manufacturing anchor: last calendar day of the given month/year.
+ * Manufacturing anchor: last calendar day of the given month/year (UTC).
+ * @param mfgMonth 1-indexed month (1 = January).
  */
 export function mfgMonthToDate(mfgMonth: number, mfgYear: number): Date {
-  return new Date(mfgYear, mfgMonth, 0);
+  return new Date(Date.UTC(mfgYear, mfgMonth, 0));
 }
 
 /**
- * Batch expiry: last day of the month reached by adding shelf_life_months
- * to the mfg anchor (last day of mfg month).
+ * Batch expiry (US-9-8): last day of the month before (mfg month + shelf life months).
+ * E.g. Mfg March 2026 + 60 months → February 2031.
  */
 export function computeBatchExpiryDate(
   mfgMonth: number,
@@ -49,5 +50,12 @@ export function computeBatchExpiryDate(
 ): Date {
   const mfgAnchor = mfgMonthToDate(mfgMonth, mfgYear);
   const expiryAnchor = addMonths(mfgAnchor, shelfLifeMonths);
-  return endOfMonth(expiryAnchor);
+  return endOfMonth(subMonths(expiryAnchor, 1));
+}
+
+/** Derive batch expiry from an ISO mfg date (first of month) and shelf life in months. */
+export function expDateFromMfgDate(mfgDate: Date, shelfLifeMonths: number): Date {
+  const mfgMonth = mfgDate.getUTCMonth() + 1;
+  const mfgYear = mfgDate.getUTCFullYear();
+  return computeBatchExpiryDate(mfgMonth, mfgYear, shelfLifeMonths);
 }

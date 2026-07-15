@@ -13,12 +13,15 @@ import { AuditAction, AuditEntityType, log as auditLog } from "../../services/au
 import { getUserById, verifyUserPassword } from "../auth/auth.service";
 import {
   assertAwaitingCheck,
+  assertAttachmentRequired,
   assertCompleteableStatus,
   assertEditableAwsDocument,
   assertExpiryAcknowledged,
   assertNotSameAsAnalyst,
   assertOosAcknowledged,
+  assertOutsideLabReadings,
   assertQcChecker,
+  assertRejectCheckable,
   assertSectionAssignee,
   assertSectionHasConclusion,
   validateExpiryAckComment,
@@ -156,6 +159,8 @@ export async function completeAwsSection(
   assertSectionHasConclusion(section);
   assertOosAcknowledged(section);
   await assertExpiryAcknowledged(section);
+  assertOutsideLabReadings(section);
+  await assertAttachmentRequired(section);
 
   const updated = await prisma.$transaction(async (tx) => {
     const row = await awsRepo.updateAwsSection(
@@ -230,7 +235,7 @@ export async function rejectCheckAwsSection(
   assertEditableAwsDocument(section);
   await assertQcChecker(actor);
   assertNotSameAsAnalyst(section, actor);
-  assertAwaitingCheck(section);
+  assertRejectCheckable(section);
 
   const updated = await prisma.$transaction(async (tx) => {
     const row = await awsRepo.updateAwsSection(

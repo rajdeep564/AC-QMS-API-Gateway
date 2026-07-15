@@ -1,6 +1,7 @@
 import { Response } from "express";
 import { asyncHandler } from "../../lib/async-handler";
 import { ok } from "../../lib/api-response";
+import { AppError } from "../../lib/app-error";
 import type { AuthenticatedRequest } from "../../types/authenticated-request";
 import type { TransitionBody } from "../masters/masters.schema";
 import {
@@ -16,12 +17,24 @@ import {
   patchAwsSection,
   previewAwsSection,
 } from "./aws.service";
+import {
+  deleteSectionAttachment,
+  listSectionAttachments,
+  uploadSectionAttachment,
+} from "./aws-attachments.service";
+import * as awsRepo from "./aws.repository";
+import {
+  assertAnalystEditableStatus,
+  assertEditableAwsDocument,
+  assertSectionAssignee,
+} from "./aws-guards";
 import type {
   AcknowledgeExpiredBody,
   AcknowledgeOosBody,
   PatchAwsSectionBody,
   PreviewAwsSectionBody,
   RejectCheckBody,
+  UploadAttachmentBody,
 } from "./aws.schema";
 
 export const listSections = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
@@ -82,4 +95,35 @@ export const rejectCheckSection = asyncHandler(async (req: AuthenticatedRequest,
   const { id } = req.params;
   const updated = await rejectCheckAwsSection(id, body, req.user, req.ip);
   res.json(ok(updated));
+});
+
+export const listAttachments = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const { id } = req.params;
+  const section = await awsRepo.findAwsSectionById(id);
+  if (!section) throw AppError.notFound("AWS section");
+  const attachments = await listSectionAttachments(id);
+  res.json(ok(attachments));
+});
+
+export const uploadAttachment = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const body = req.body as UploadAttachmentBody;
+  const { id } = req.params;
+  const section = await awsRepo.findAwsSectionById(id);
+  if (!section) throw AppError.notFound("AWS section");
+  assertEditableAwsDocument(section);
+  assertSectionAssignee(section, req.user);
+  assertAnalystEditableStatus(section);
+  const attachment = await uploadSectionAttachment(section, body);
+  res.status(201).json(ok(attachment));
+});
+
+export const deleteAttachment = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const { id, attachmentId } = req.params;
+  const section = await awsRepo.findAwsSectionById(id);
+  if (!section) throw AppError.notFound("AWS section");
+  assertEditableAwsDocument(section);
+  assertSectionAssignee(section, req.user);
+  assertAnalystEditableStatus(section);
+  await deleteSectionAttachment(section, attachmentId);
+  res.json(ok({ deleted: true }));
 });

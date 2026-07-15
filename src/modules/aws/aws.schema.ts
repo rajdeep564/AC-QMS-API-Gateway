@@ -5,6 +5,9 @@ const qualitativeReadingsSchema = z
   .object({
     text: z.string().optional(),
     passFail: z.enum(["PASS", "FAIL"]).optional(),
+    remarks: z.string().optional(),
+    externalReportNo: z.string().optional(),
+    analysisDate: z.string().optional(),
     instrumentExpiredAck: z.boolean().optional(),
     reagentExpiredAck: z.boolean().optional(),
   })
@@ -14,6 +17,9 @@ const quantitativeReadingsSchema = z
   .object({
     variables: z.record(z.number()).optional(),
     sets: z.array(z.record(z.number())).optional(),
+    remarks: z.string().optional(),
+    externalReportNo: z.string().optional(),
+    analysisDate: z.string().optional(),
     instrumentExpiredAck: z.boolean().optional(),
     reagentExpiredAck: z.boolean().optional(),
   })
@@ -72,8 +78,17 @@ export const rejectCheckBodySchema = z
   })
   .strict();
 
+export const uploadAttachmentBodySchema = z
+  .object({
+    fileName: z.string().min(1).max(200),
+    mimeType: z.string().min(1),
+    contentBase64: z.string().min(1),
+  })
+  .strict();
+
 export type PatchAwsSectionBody = z.infer<typeof patchAwsSectionBodySchema>;
 export type PreviewAwsSectionBody = z.infer<typeof previewAwsSectionBodySchema>;
 export type AcknowledgeExpiredBody = z.infer<typeof acknowledgeExpiredBodySchema>;
 export type AcknowledgeOosBody = z.infer<typeof acknowledgeOosBodySchema>;
 export type RejectCheckBody = z.infer<typeof rejectCheckBodySchema>;
+export type UploadAttachmentBody = z.infer<typeof uploadAttachmentBodySchema>;

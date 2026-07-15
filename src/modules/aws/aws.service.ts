@@ -23,6 +23,7 @@ import { getUserById } from "../auth/auth.service";
 import {
   assertAnalystEditableStatus,
   assertEditableAwsDocument,
+  assertAwsDocumentReady,
   assertSectionAssignee,
   rejectClientComputedFields,
 } from "./aws-guards";
@@ -141,9 +142,29 @@ export async function listAwsSections(
   if (!doc || doc.docType !== DocType.AWS) {
     throw AppError.notFound("AWS document");
   }
+  assertAwsDocumentReady(doc);
 
   const sections = await awsRepo.findAwsSectionsByDocumentId(awsDocId);
-  return toAwsSectionsListResponse(sections, actor);
+  const moaSections = await prisma.moaDocumentSection.findMany({
+    where: { batchId: doc.batchId },
+    select: { specDocumentTestId: true, procedureSnapshot: true },
+  });
+  const moaByTestId = new Map(
+    moaSections.map((s) => [s.specDocumentTestId, s.procedureSnapshot]),
+  );
+
+  return toAwsSectionsListResponse(sections, actor, moaByTestId);
+}
+
+async function loadMoaProcedureSnapshot(
+  batchId: string,
+  specDocumentTestId: string,
+): Promise<string | null> {
+  const moa = await prisma.moaDocumentSection.findFirst({
+    where: { batchId, specDocumentTestId },
+    select: { procedureSnapshot: true },
+  });
+  return moa?.procedureSnapshot ?? null;
 }
 
 export async function getAwsSectionDetail(
@@ -154,7 +175,17 @@ export async function getAwsSectionDetail(
   if (!section) {
     throw AppError.notFound("AWS section");
   }
-  return toAwsSectionDetail(section, actor);
+  assertAwsDocumentReady({
+    status: section.batchDocument.status,
+    batch: { status: section.batchDocument.batch.status },
+  });
+  const procedureSnapshot = await loadMoaProcedureSnapshot(
+    section.batchDocument.batchId,
+    section.specDocumentTestId,
+  );
+  const { countSectionAttachments } = await import("./aws-attachments.service");
+  const attachmentCount = await countSectionAttachments(section.id);
+  return toAwsSectionDetail(section, actor, { procedureSnapshot, attachmentCount });
 }
 
 export async function patchAwsSection(

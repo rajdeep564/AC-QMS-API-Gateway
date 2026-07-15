@@ -8,7 +8,23 @@ const envSchema = z.object({
   JWT_REFRESH_EXPIRY: z.string().min(1),
   BCRYPT_ROUNDS: z.coerce.number().int().min(10).max(15),
   PORT: z.coerce.number().int().positive(),
-  CORS_ORIGIN: z.string().url(),
+  /** Comma-separated allowed browser origins, e.g. http://localhost:3000,http://localhost:3001 */
+  CORS_ORIGIN: z
+    .string()
+    .min(1)
+    .transform((value) => {
+      const origins = value
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (origins.length === 0) {
+        throw new Error("CORS_ORIGIN must list at least one origin");
+      }
+      for (const origin of origins) {
+        z.string().url().parse(origin);
+      }
+      return origins;
+    }),
   NODE_ENV: z.enum(["development", "production", "test"]),
   DOC_MODULE_URL: z.string().url(),
   DOC_MODULE_API_KEY: z.string().min(1),
@@ -30,7 +46,7 @@ export const config = {
   jwtRefreshExpiry: env.JWT_REFRESH_EXPIRY,
   bcryptRounds: env.BCRYPT_ROUNDS,
   port: env.PORT,
-  corsOrigin: env.CORS_ORIGIN,
+  corsOrigins: env.CORS_ORIGIN,
   nodeEnv: env.NODE_ENV,
   isProduction: env.NODE_ENV === "production",
   docModuleUrl: env.DOC_MODULE_URL,

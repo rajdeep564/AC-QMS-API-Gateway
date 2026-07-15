@@ -37,35 +37,15 @@ import { generateCoaFromSignedAws } from "../src/services/coa-generator";
 import { transition } from "../src/services/workflow-engine";
 import { JwtAccessPayload } from "../src/types/auth.types";
 
-const DEV_PASSWORD = "Acqms@2026";
+import {
+  DEV_PASSWORD,
+  ensureQaSignedHarnessSpec,
+  ensureVerifierActiveMaster,
+  ensureVerifierProduct,
+} from "./lib/verifier-harness";
+import { SAMPLE_SPEC_BODY } from "./fixtures/spec-sample-body";
 
 type CheckResult = { id: number; name: string; pass: boolean; detail: string };
-
-const SAMPLE_SPEC_BODY: CreateSpecBody = {
-  variant: "GENERAL",
-  tests: [
-    {
-      sortOrder: 1,
-      testName: "Appearance",
-      resultType: "QUALITATIVE",
-      acceptanceCriteria: "White crystalline powder",
-    },
-    {
-      sortOrder: 2,
-      testName: "Assay",
-      resultType: "QUANTITATIVE",
-      operator: "NLT",
-      minValue: 99.0,
-      uom: "%",
-      formula: "result",
-      formulaVariables: { variables: [{ name: "result" }] },
-    },
-  ],
-  moaSections: [
-    { specTestRef: 0, pharmacopoeia: "IP", samplePreparation: "Visual inspection" },
-    { specTestRef: 1, pharmacopoeia: "IP", samplePreparation: "Titrate sample" },
-  ],
-};
 
 function actor(userId: string, role: Role, departmentId: string | null = null): JwtAccessPayload {
   return { userId, role, departmentId };
@@ -161,15 +141,15 @@ async function completeSectionTwoPerson(
 }
 
 async function createCoaReadyFixture(batchNoSuffix: string) {
-  const glycine = await prisma.product.findFirst({ where: { name: "Glycine" } });
-  if (!glycine) throw new Error("Glycine product must be seeded");
+  const verifierProduct = await ensureVerifierProduct();
+  await ensureVerifierActiveMaster((await getUser("kavya.patel")).id);
 
   const master = await prisma.productMaster.findFirst({
-    where: { productId: glycine.id, status: "ACTIVE" },
+    where: { productId: verifierProduct.id, status: "ACTIVE" },
     include: { fields: true },
   });
   const productCode = master?.fields.find((f) => f.fieldKey === "product_code")?.value;
-  if (!productCode) throw new Error("Glycine master must have product_code");
+  if (!productCode) throw new Error("Verifier harness master must have product_code");
 
   const kavya = await getUser("kavya.patel");
   const meera = await getUser("meera.iyer");
@@ -177,9 +157,15 @@ async function createCoaReadyFixture(batchNoSuffix: string) {
   const sanjay = await getUser("sanjay.reddy");
 
   const batchNo = `S3C-${batchNoSuffix}`;
-  const signedSpec = await ensureQaSignedSpec(glycine.id, kavya.id, priya.id, sanjay.id);
+  const signedSpec = await ensureQaSignedHarnessSpec(
+    verifierProduct.id,
+    kavya.id,
+    priya.id,
+    sanjay.id,
+    SAMPLE_SPEC_BODY,
+  );
   const created = await createBatch(
-    glycine.id,
+    verifierProduct.id,
     {
       sourceSpecId: signedSpec.id,
       batchNo,

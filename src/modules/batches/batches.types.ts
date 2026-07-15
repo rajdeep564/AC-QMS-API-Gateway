@@ -20,6 +20,7 @@ export interface SpecDocumentTestDto {
   acceptanceCriteria: string | null;
   formula: string | null;
   sortOrder: number;
+  isOutsideLab: boolean;
 }
 
 export interface MoaDocumentSectionDto {
@@ -77,4 +78,13 @@ export interface BatchDetailDto extends BatchDto {
 
 export interface CreateBatchResultDto {
   batch: BatchDetailDto;
+}
+
+export interface BatchReadyProductDto {
+  productId: string;
+  productName: string;
+  sourceSpecId: string;
+  specNo: string;
+  revisionNo: number;
+  shelfLifeMonths: number;
 }

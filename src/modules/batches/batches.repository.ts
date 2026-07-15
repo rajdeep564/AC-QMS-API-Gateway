@@ -56,6 +56,7 @@ export type SpecTestSnapshot = {
   acceptanceCriteria?: string | null;
   formula?: string | null;
   sortOrder: number;
+  isOutsideLab?: boolean;
 };
 
 export type MoaSectionSnapshot = {
@@ -243,12 +244,37 @@ export async function createAwsSections(
 }
 
 export async function allAwsSectionsComplete(documentId: string, client: Db = prisma) {
+  const summary = await countAwsSectionCompletion(documentId, client);
+  return summary.allComplete;
+}
+
+export async function countAwsSectionCompletion(documentId: string, client: Db = prisma) {
   const sections = await client.awsSection.findMany({
     where: { batchDocumentId: documentId },
     select: { status: true },
   });
-  if (sections.length === 0) return false;
-  return sections.every((s) => s.status === SectionStatus.COMPLETE);
+  const total = sections.length;
+  const incomplete = sections.filter((s) => s.status !== SectionStatus.COMPLETE).length;
+  return {
+    total,
+    incomplete,
+    complete: total - incomplete,
+    allComplete: total > 0 && incomplete === 0,
+  };
+}
+
+/** US-12-13 / US-12-15/16 — reopen checked sections when AWS document rejected to DRAFT. */
+export async function reopenAwsSectionsForRework(documentId: string, client: Db = prisma) {
+  return client.awsSection.updateMany({
+    where: {
+      batchDocumentId: documentId,
+      status: SectionStatus.COMPLETE,
+    },
+    data: {
+      status: SectionStatus.IN_PROGRESS,
+      checkerId: null,
+    },
+  });
 }
 
 export async function findAwsSectionsForCoa(documentId: string, client: Db = prisma) {
@@ -375,6 +401,7 @@ export async function createBatchWithSnapshot(
           acceptanceCriteria: test.acceptanceCriteria ?? null,
           formula: test.formula ?? null,
           sortOrder: test.sortOrder,
+          isOutsideLab: test.isOutsideLab ?? false,
         },
       });
       testIdBySource.set(test.sourceSpecTestId, row.id);

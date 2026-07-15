@@ -8,10 +8,24 @@ import {
   submitDocumentBodySchema,
   transitionBodySchema,
 } from "../masters/masters.schema";
-import { approve, getById, reject, sign, signAndIssue, submit } from "./documents.controller";
+import {
+  approve,
+  getById,
+  listAwsApprovalQueueHandler,
+  reject,
+  sign,
+  signAndIssue,
+  submit,
+} from "./documents.controller";
 
 const router = Router();
 
+router.get(
+  "/aws/approval-queue",
+  requireAuth,
+  requireRole(Role.QC_MGR, Role.SADMIN),
+  listAwsApprovalQueueHandler,
+);
 router.get("/:id", requireAuth, getById);
 router.post(
   "/:id/submit",

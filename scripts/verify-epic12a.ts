@@ -74,6 +74,16 @@ async function main() {
     maxValue: 1.0,
   });
   assert(nmtOk.conclusion === Conclusion.SATISFACTORY, "NMT in-range");
+  const unboundedBetween = evaluateQuantitativeConclusion(1.0, {
+    resultType: ResultType.QUANTITATIVE,
+    operator: Operator.BETWEEN,
+    minValue: null,
+    maxValue: null,
+  });
+  assert(
+    unboundedBetween.conclusion === Conclusion.SATISFACTORY,
+    "BETWEEN with no bounds is satisfactory (customer-requirement tests)",
+  );
   console.log("  PASS: BETWEEN/NMT/NLT conclusion rules\n");
 
   const kavya = await login("kavya.patel");

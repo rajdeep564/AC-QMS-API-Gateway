@@ -31,35 +31,17 @@ import {
 import { transition } from "../src/services/workflow-engine";
 import { JwtAccessPayload } from "../src/types/auth.types";
 
-const DEV_PASSWORD = "Acqms@2026";
+import {
+  DEV_PASSWORD,
+  cleanupVerifierHarnessData,
+  ensureQaSignedHarnessSpec,
+  ensureVerifierActiveMaster,
+  ensureVerifierProduct,
+  resetVerifierStandingSpecs,
+} from "./lib/verifier-harness";
+import { SAMPLE_SPEC_BODY } from "./fixtures/spec-sample-body";
 
 type CheckResult = { name: string; pass: boolean; detail: string };
-
-const SAMPLE_SPEC_BODY: CreateSpecBody = {
-  variant: "GENERAL",
-  tests: [
-    {
-      sortOrder: 1,
-      testName: "Appearance",
-      resultType: "QUALITATIVE",
-      acceptanceCriteria: "White crystalline powder",
-    },
-    {
-      sortOrder: 2,
-      testName: "Assay",
-      resultType: "QUANTITATIVE",
-      operator: "NLT",
-      minValue: 99.0,
-      uom: "%",
-      formula: "result",
-      formulaVariables: { variables: [{ name: "result" }] },
-    },
-  ],
-  moaSections: [
-    { specTestRef: 0, pharmacopoeia: "IP", samplePreparation: "Visual inspection" },
-    { specTestRef: 1, pharmacopoeia: "IP", samplePreparation: "Titrate sample" },
-  ],
-};
 
 function actor(userId: string, role: Role, departmentId: string | null = null): JwtAccessPayload {
   return { userId, role, departmentId };
@@ -101,43 +83,30 @@ async function deleteSpecFixture(productId: string): Promise<void> {
   await prisma.spec.deleteMany({ where: { productId } });
 }
 
-async function ensureQaSignedSpec(
-  productId: string,
-  kavyaId: string,
-  priyaId: string,
-  sanjayId: string,
-) {
-  await deleteSpecFixture(productId);
-  const created = await createSpec(productId, SAMPLE_SPEC_BODY, actor(kavyaId, Role.QC_EXEC));
-  await submitSpec(created.id, actor(kavyaId, Role.QC_EXEC));
-  await approveSpec(created.id, DEV_PASSWORD, actor(priyaId, Role.QC_MGR));
-  await signSpec(created.id, DEV_PASSWORD, actor(sanjayId, Role.QA_MGR));
-  const signed = await prisma.spec.findFirst({
-    where: { productId, status: StandingDocStatus.QA_SIGNED },
-    orderBy: { revisionNo: "desc" },
-  });
-  if (!signed) throw new Error("Failed to obtain QA_SIGNED spec fixture");
-  return signed;
-}
-
 async function createSubmittedBatchFixture(): Promise<{
   batchId: string;
   productId: string;
   sanjayId: string;
   priyaId: string;
 }> {
-  const glycine = await prisma.product.findFirst({ where: { name: "Glycine" } });
-  if (!glycine) throw new Error("Glycine product must be seeded");
-
   const kavya = await getUser("kavya.patel");
   const priya = await getUser("priya.mehta");
   const sanjay = await getUser("sanjay.reddy");
 
-  const signedSpec = await ensureQaSignedSpec(glycine.id, kavya.id, priya.id, sanjay.id);
+  const verifierProduct = await ensureVerifierProduct();
+  await ensureVerifierActiveMaster(kavya.id);
+
+  const signedSpec = await ensureQaSignedHarnessSpec(
+    verifierProduct.id,
+    kavya.id,
+    priya.id,
+    sanjay.id,
+    SAMPLE_SPEC_BODY,
+  );
   const batchNo = `S3A-${Date.now()}`;
 
   const created = await createBatch(
-    glycine.id,
+    verifierProduct.id,
     {
       sourceSpecId: signedSpec.id,
       batchNo,
@@ -151,7 +120,7 @@ async function createSubmittedBatchFixture(): Promise<{
 
   return {
     batchId: created.batch.id,
-    productId: glycine.id,
+    productId: verifierProduct.id,
     sanjayId: sanjay.id,
     priyaId: priya.id,
   };
@@ -228,19 +197,25 @@ async function testSnapshotImmutability(): Promise<void> {
   let specId: string | null = null;
 
   try {
-    const glycine = await prisma.product.findFirst({ where: { name: "Glycine" } });
-    if (!glycine) throw new Error("Glycine product must be seeded");
-
     const kavya = await getUser("kavya.patel");
     const priya = await getUser("priya.mehta");
     const sanjay = await getUser("sanjay.reddy");
 
-    productId = glycine.id;
-    const signedSpec = await ensureQaSignedSpec(glycine.id, kavya.id, priya.id, sanjay.id);
+    const verifierProduct = await ensureVerifierProduct();
+    await ensureVerifierActiveMaster(kavya.id);
+
+    productId = verifierProduct.id;
+    const signedSpec = await ensureQaSignedHarnessSpec(
+      verifierProduct.id,
+      kavya.id,
+      priya.id,
+      sanjay.id,
+      SAMPLE_SPEC_BODY,
+    );
     specId = signedSpec.id;
 
     const created = await createBatch(
-      glycine.id,
+      verifierProduct.id,
       {
         sourceSpecId: signedSpec.id,
         batchNo: `IMMUT-${Date.now()}`,

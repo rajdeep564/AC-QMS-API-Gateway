@@ -13,8 +13,10 @@ import { CreateSpecBody, ListSpecsQuery, PatchSpecBody, ReviseSpecBody } from ".
 import {
   MoaDocDto,
   MoaSectionDto,
+  SpecApprovalQueueItemDto,
   SpecDetailDto,
   SpecListItemDto,
+  SpecSignatureQueueItemDto,
   SpecTestDto,
 } from "./specs.types";
 import * as specsRepo from "./specs.repository";
@@ -158,6 +160,77 @@ export async function listSpecsForProduct(
     effectiveDate: s.effectiveDate,
     createdAt: s.createdAt,
     hasMoa: Boolean(s.moaDoc),
+  }));
+}
+
+export async function listSpecApprovalQueue(
+  actor: JwtAccessPayload,
+): Promise<SpecApprovalQueueItemDto[]> {
+  if (actor.role !== Role.QC_MGR && actor.role !== Role.SADMIN) {
+    throw AppError.forbidden("Only QC Manager can view the SPEC approval queue");
+  }
+
+  const specs = await specsRepo.listSubmittedSpecsForQcApproval(actor.userId);
+  if (!specs.length) {
+    return [];
+  }
+
+  const specIds = specs.map((s) => s.id);
+  const submitAudits = await prisma.auditLog.findMany({
+    where: {
+      entityType: AuditEntityType.SPEC,
+      entityId: { in: specIds },
+      action: AuditAction.SUBMIT,
+    },
+    orderBy: { timestamp: "desc" },
+    select: { entityId: true, timestamp: true },
+  });
+
+  const submittedAtBySpecId = new Map<string, Date>();
+  for (const row of submitAudits) {
+    if (row.entityId && !submittedAtBySpecId.has(row.entityId)) {
+      submittedAtBySpecId.set(row.entityId, row.timestamp);
+    }
+  }
+
+  return specs.map((spec) => {
+    const submitter = spec.submittedBy ?? spec.createdBy;
+    return {
+      id: spec.id,
+      specNo: spec.specNo,
+      moaNo: spec.moaDoc?.moaNo ?? null,
+      revisionNo: spec.revisionNo,
+      productId: spec.productId,
+      productName: spec.product.name,
+      status: spec.status,
+      submittedBy: submitter
+        ? { username: submitter.username, fullName: submitter.fullName }
+        : null,
+      submittedAt: submittedAtBySpecId.get(spec.id) ?? spec.createdAt,
+    };
+  });
+}
+
+export async function listSpecSignatureQueue(
+  actor: JwtAccessPayload,
+): Promise<SpecSignatureQueueItemDto[]> {
+  if (actor.role !== Role.QA_MGR && actor.role !== Role.SADMIN) {
+    throw AppError.forbidden("Only QA Manager can view the SPEC signature queue");
+  }
+
+  const specs = await specsRepo.listQcApprovedSpecsForQaSignature();
+  return specs.map((spec) => ({
+    id: spec.id,
+    specNo: spec.specNo,
+    moaNo: spec.moaDoc?.moaNo ?? null,
+    revisionNo: spec.revisionNo,
+    productId: spec.productId,
+    productName: spec.product.name,
+    status: spec.status,
+    qcApprovedBy: spec.qcApprovedBy
+      ? { username: spec.qcApprovedBy.username, fullName: spec.qcApprovedBy.fullName }
+      : null,
+    approvedAt: spec.approvedAt ?? spec.createdAt,
   }));
 }
 
