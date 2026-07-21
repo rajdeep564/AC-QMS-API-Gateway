@@ -42,7 +42,12 @@ export type MoaSectionInput = {
 };
 
 const specDetailInclude = {
+  product: { select: { id: true, name: true } },
   specTests: { orderBy: { sortOrder: "asc" as const } },
+  createdBy: { select: { id: true, fullName: true, role: true } },
+  submittedBy: { select: { id: true, fullName: true, role: true } },
+  qcApprovedBy: { select: { id: true, fullName: true, role: true } },
+  qaSignedBy: { select: { id: true, fullName: true, role: true } },
   moaDoc: {
     include: {
       sections: {
@@ -53,6 +58,11 @@ const specDetailInclude = {
 } satisfies Prisma.SpecInclude;
 
 export type SpecWithDetails = Prisma.SpecGetPayload<{ include: typeof specDetailInclude }>;
+
+/** Alias for Epic 21 standing-document render loader. */
+export async function findSpecWithMoaForRender(specId: string, client: Db = prisma) {
+  return findSpecWithDetails(specId, client);
+}
 
 export async function findSpecById(specId: string, client: Db = prisma) {
   return client.spec.findUnique({ where: { id: specId } });
@@ -125,19 +135,56 @@ export async function aggregateRevisionNo(
   });
 }
 
-export async function findBatchReadySpec(
+/** QA_SIGNED SPECs for batch selection (C-1). Newest revision first. */
+export async function listActiveSpecs(
   productId: string,
   variant: SpecVariant = SpecVariant.GENERAL,
   client: Db = prisma,
 ) {
-  return client.spec.findFirst({
+  return client.spec.findMany({
     where: {
       productId,
       variant,
       status: StandingDocStatus.QA_SIGNED,
     },
-    orderBy: { revisionNo: "desc" },
+    orderBy: [{ revisionNo: "desc" }, { approvedAt: "desc" }],
+    select: {
+      id: true,
+      productId: true,
+      variant: true,
+      specNo: true,
+      revisionNo: true,
+      status: true,
+      effectiveDate: true,
+      approvedAt: true,
+      createdAt: true,
+    },
   });
+}
+
+export async function findActiveSpecById(
+  productId: string,
+  specId: string,
+  variant: SpecVariant = SpecVariant.GENERAL,
+  client: Db = prisma,
+) {
+  return client.spec.findFirst({
+    where: {
+      id: specId,
+      productId,
+      variant,
+      status: StandingDocStatus.QA_SIGNED,
+    },
+  });
+}
+
+export async function findBatchReadySpec(
+  productId: string,
+  variant: SpecVariant = SpecVariant.GENERAL,
+  client: Db = prisma,
+) {
+  const active = await listActiveSpecs(productId, variant, client);
+  return active[0] ?? null;
 }
 
 export async function findInFlightRevision(

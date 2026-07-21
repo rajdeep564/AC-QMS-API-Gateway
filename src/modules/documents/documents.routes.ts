@@ -10,9 +10,12 @@ import {
 } from "../masters/masters.schema";
 import {
   approve,
+  downloadAttachmentHandler,
   getById,
+  getExplorerHandler,
   listAwsApprovalQueueHandler,
   reject,
+  retryDocumentRenderHandler,
   sign,
   signAndIssue,
   submit,
@@ -26,6 +29,19 @@ router.get(
   requireRole(Role.QC_MGR, Role.SADMIN),
   listAwsApprovalQueueHandler,
 );
+
+/** Must be registered before /:id so "explorer" is not captured as a document id. */
+router.get("/explorer", requireAuth, getExplorerHandler);
+
+router.get("/attachments/:id/download", requireAuth, downloadAttachmentHandler);
+
+router.post(
+  "/:batchDocumentId/render/retry",
+  requireAuth,
+  requireRole(Role.QC_MGR, Role.QA_MGR, Role.SADMIN),
+  retryDocumentRenderHandler,
+);
+
 router.get("/:id", requireAuth, getById);
 router.post(
   "/:id/submit",

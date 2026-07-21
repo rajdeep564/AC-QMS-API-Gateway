@@ -2,7 +2,7 @@ import { DocStatus, DocType, Role } from "@prisma/client";
 import { AppError } from "../../lib/app-error";
 import { JwtAccessPayload } from "../../types/auth.types";
 import { rejectCoaWorkflowEdit } from "../../services/coa-guards";
-import { renderDocuments } from "../../services/render-documents.service";
+import { scheduleDocumentRender } from "../../services/render-documents.service";
 import {
   getAllowedAwsDocumentActions,
   getAllowedCoaDocumentActions,
@@ -17,6 +17,8 @@ import { verifyUserPassword } from "../auth/auth.service";
 import { toDocumentDetail } from "./documents.mapper";
 import { AwsApprovalQueueItemDto, DocumentAllowedAction, DocumentDetailDto } from "./documents.types";
 import * as documentsRepo from "./documents.repository";
+import { AuditEntityType } from "../../services/audit.service";
+import { loadStageTimestampsFromAudit } from "../../utils/signature-lineage-audit";
 
 function resolveEntityTypeOrThrow(docType: DocType) {
   const entityType = resolveWorkflowEntityType(docType);
@@ -53,7 +55,11 @@ export async function getDocumentDetail(
         ? getAllowedCoaDocumentActions(doc.status as WorkflowStatus, actor.role)
         : [];
 
-  return toDocumentDetail(doc, allowedActions);
+  const auditEntityType =
+    doc.docType === DocType.COA ? AuditEntityType.COA : AuditEntityType.AWS;
+  const stageTimestamps = await loadStageTimestampsFromAudit(auditEntityType, doc.id);
+
+  return toDocumentDetail(doc, allowedActions, stageTimestamps);
 }
 
 /** US-12-15 — QC Manager queue for SUBMITTED AWS documents. */
@@ -146,9 +152,11 @@ export async function signAndIssueCoa(
     ipAddress,
   });
 
-  await renderDocuments("COA", documentId, {
-    userId: actor.userId,
-    docNo: doc.docNo,
+  // Epic 21: post-commit render (non-blocking of the approval itself)
+  await scheduleDocumentRender({
+    kind: "COA",
+    batchDocumentId: documentId,
+    actorId: actor.userId,
   });
 
   return getDocumentDetail(documentId, actor);

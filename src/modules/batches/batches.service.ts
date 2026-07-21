@@ -1,4 +1,4 @@
-import { BatchStatus, Prisma, Role, SpecVariant, StandingDocStatus } from "@prisma/client";
+import { BatchStatus, Prisma, Role, SpecVariant } from "@prisma/client";
 import { prisma } from "../../lib/prisma-types";
 import { AppError } from "../../lib/app-error";
 import { JwtAccessPayload } from "../../types/auth.types";
@@ -25,6 +25,8 @@ import {
 } from "./batches.types";
 import * as batchesRepo from "./batches.repository";
 import type { BatchWithDetails } from "./batches.repository";
+import { buildSignatureLineage } from "../../utils/signature-lineage.mapper";
+import { loadStageTimestampsFromAudit } from "../../utils/signature-lineage-audit";
 
 function decimalToString(value: { toString(): string } | null | undefined): string | null {
   return value ? value.toString() : null;
@@ -37,6 +39,8 @@ function toDocumentDto(doc: BatchWithDetails["batchDocuments"][number]): BatchDo
     docNo: doc.docNo,
     status: doc.status,
     complianceVerdict: doc.complianceVerdict,
+    renderStatus: doc.renderStatus,
+    renderError: doc.renderError,
   };
 }
 
@@ -66,7 +70,24 @@ function toMoaSectionDto(section: BatchWithDetails["moaDocSections"][number]): M
   };
 }
 
-function toBatchDetail(batch: BatchWithDetails, actor: JwtAccessPayload): BatchDetailDto {
+function toBatchDetail(
+  batch: BatchWithDetails,
+  actor: JwtAccessPayload,
+  signatureLineage?: ReturnType<typeof buildSignatureLineage>,
+): BatchDetailDto {
+  const lineage =
+    signatureLineage ??
+    buildSignatureLineage({
+      authoredBy: batch.createdBy,
+      authoredAt: batch.createdAt,
+      submittedBy: null,
+      submittedAt: null,
+      qcApprovedBy: null,
+      qcApprovedAt: null,
+      qaSignedBy: batch.approvedBy,
+      qaSignedAt: batch.releasedAt,
+    });
+
   return {
     id: batch.id,
     productId: batch.productId,
@@ -102,6 +123,7 @@ function toBatchDetail(batch: BatchWithDetails, actor: JwtAccessPayload): BatchD
     allowedActions: getAllowedBatchActions(batch.status, actor.role, actor.userId, {
       createdById: batch.createdById,
     }),
+    signatureLineage: lineage,
   };
 }
 
@@ -187,7 +209,9 @@ export async function listBatches(query: ListBatchesQuery) {
       docType: doc.docType,
       docNo: doc.docNo,
       status: doc.status,
-      complianceVerdict: null,
+      complianceVerdict: doc.complianceVerdict,
+      renderStatus: doc.renderStatus,
+      renderError: doc.renderError,
     })),
   }));
 
@@ -202,9 +226,10 @@ export async function listBatchReadyProducts(): Promise<BatchReadyProductDto[]> 
     const master = await mastersRepo.findActiveMasterForProduct(product.id);
     if (!master) continue;
 
-    const spec = await specsRepo.findBatchReadySpec(product.id, SpecVariant.GENERAL);
-    if (!spec) continue;
+    const activeSpecs = await specsRepo.listActiveSpecs(product.id, SpecVariant.GENERAL);
+    if (activeSpecs.length === 0) continue;
 
+    const spec = activeSpecs[0];
     const masterWithFields = await mastersRepo.findMasterWithFields(master.id);
     if (!masterWithFields) continue;
 
@@ -233,13 +258,16 @@ export async function createBatch(
 ): Promise<CreateBatchResultDto> {
   await validateAssignee(body.assignedQcExecId);
 
-  const batchReady = await specsRepo.findBatchReadySpec(productId, SpecVariant.GENERAL);
-  if (!batchReady || batchReady.id !== body.sourceSpecId) {
-    throw AppError.conflict("No QA_SIGNED standing SPEC available for batch creation");
-  }
-
-  if (batchReady.status !== StandingDocStatus.QA_SIGNED) {
-    throw AppError.conflict("Source SPEC must be QA_SIGNED");
+  // C-1: QC Manager selects any active (QA_SIGNED) SPEC; not forced to latest.
+  const active = await specsRepo.findActiveSpecById(
+    productId,
+    body.sourceSpecId,
+    SpecVariant.GENERAL,
+  );
+  if (!active) {
+    throw AppError.conflict(
+      "Source SPEC must be QA_SIGNED and non-superseded for this product",
+    );
   }
 
   const spec = await specsRepo.findSpecWithDetails(body.sourceSpecId);
@@ -338,7 +366,18 @@ export async function getBatchById(batchId: string, actor: JwtAccessPayload): Pr
   if (!batch) {
     throw AppError.notFound("Batch");
   }
-  return toBatchDetail(batch, actor);
+  const stageTimestamps = await loadStageTimestampsFromAudit(AuditEntityType.BATCH, batch.id);
+  const lineage = buildSignatureLineage({
+    authoredBy: batch.createdBy,
+    authoredAt: batch.createdAt,
+    submittedBy: batch.createdBy,
+    submittedAt: stageTimestamps.submittedAt,
+    qcApprovedBy: null,
+    qcApprovedAt: null,
+    qaSignedBy: batch.approvedBy,
+    qaSignedAt: stageTimestamps.qaSignedAt ?? batch.releasedAt,
+  });
+  return toBatchDetail(batch, actor, lineage);
 }
 
 export async function submitBatch(batchId: string, actor: JwtAccessPayload, ipAddress?: string) {

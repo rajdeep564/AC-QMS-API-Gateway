@@ -42,11 +42,7 @@ function buildMarketingDocumentFilters(
   }
 
   if (filters.customer) {
-    and.push({
-      batch: {
-        customerName: { contains: filters.customer, mode: "insensitive" },
-      },
-    });
+    // Customer fields are not on Batch in Rev 2.3.1 — ignore filter until C-legacy columns exist.
   }
 
   if (filters.type) {
@@ -80,11 +76,9 @@ const marketingDocumentListInclude = {
       id: true,
       batchNo: true,
       releasedAt: true,
-      customerName: true,
       product: {
         select: {
           name: true,
-          code: true,
         },
       },
     },

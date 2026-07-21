@@ -108,7 +108,17 @@ export async function listBatches(
     include: {
       product: { select: { id: true, name: true } },
       assignedQcExec: { select: { id: true, fullName: true } },
-      batchDocuments: { select: { id: true, docType: true, status: true, docNo: true } },
+      batchDocuments: {
+        select: {
+          id: true,
+          docType: true,
+          status: true,
+          docNo: true,
+          complianceVerdict: true,
+          renderStatus: true,
+          renderError: true,
+        },
+      },
     },
   });
 }
@@ -179,6 +189,44 @@ export async function findCoaDocumentForRender(documentId: string, client: Db = 
   return client.batchDocument.findUnique({
     where: { id: documentId },
     include: coaRenderInclude,
+  });
+}
+
+const awsRenderInclude = {
+  createdBy: { select: { id: true, fullName: true, role: true } },
+  submittedBy: { select: { id: true, fullName: true, role: true } },
+  qcApprovedBy: { select: { id: true, fullName: true, role: true } },
+  qaSignedBy: { select: { id: true, fullName: true, role: true } },
+  awsSections: {
+    include: {
+      specDocumentTest: true,
+      analyst: { select: { id: true, fullName: true, role: true } },
+      checker: { select: { id: true, fullName: true, role: true } },
+      instrument: true,
+      reagent: true,
+    },
+    orderBy: { specDocumentTest: { sortOrder: "asc" as const } },
+  },
+  batch: {
+    include: {
+      product: true,
+      sourceSpec: {
+        include: { moaDoc: { select: { moaNo: true } } },
+      },
+      moaDocSections: true,
+      assignedQcExec: { select: { id: true, fullName: true, role: true } },
+    },
+  },
+} satisfies Prisma.BatchDocumentInclude;
+
+export type AwsDocumentForRender = Prisma.BatchDocumentGetPayload<{
+  include: typeof awsRenderInclude;
+}>;
+
+export async function findAwsDocumentForRender(documentId: string, client: Db = prisma) {
+  return client.batchDocument.findUnique({
+    where: { id: documentId },
+    include: awsRenderInclude,
   });
 }
 
@@ -368,7 +416,10 @@ export async function createBatchWithSnapshot(
   client: Db = prisma,
 ) {
   const run = async (tx: Db) => {
-    const { arn } = await generateArn(tx as Prisma.TransactionClient);
+    const { arn } = await generateArn(tx as Prisma.TransactionClient, {
+      productId: input.productId,
+      productCode: input.productCode,
+    });
 
     const batch = await tx.batch.create({
       data: {

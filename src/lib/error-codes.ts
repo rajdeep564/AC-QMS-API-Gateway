@@ -136,6 +136,10 @@ export const ERROR_CODES = {
     status: HTTP.NOT_IMPLEMENTED,
     message: "This feature is not yet available",
   },
+  SERVICE_UNAVAILABLE: {
+    status: HTTP.SERVICE_UNAVAILABLE,
+    message: "Downstream document service temporarily unavailable",
+  },
   INTERNAL: {
     status: HTTP.INTERNAL,
     message: "An unexpected error occurred",

@@ -1,4 +1,4 @@
-import { BatchStatus, DocStatus, DocType } from "@prisma/client";
+import { BatchStatus, DocStatus, DocType, RenderStatus } from "@prisma/client";
 
 export interface BatchDocumentDto {
   id: string;
@@ -6,6 +6,8 @@ export interface BatchDocumentDto {
   docNo: string;
   status: DocStatus;
   complianceVerdict: string | null;
+  renderStatus: RenderStatus;
+  renderError: string | null;
 }
 
 export interface SpecDocumentTestDto {
@@ -74,6 +76,7 @@ export interface BatchDetailDto extends BatchDto {
   moaDocSections: MoaDocumentSectionDto[];
   batchDocuments: BatchDocumentDto[];
   allowedActions: string[];
+  signatureLineage: import("../../utils/signature-lineage.mapper").SignatureLineageDto;
 }
 
 export interface CreateBatchResultDto {

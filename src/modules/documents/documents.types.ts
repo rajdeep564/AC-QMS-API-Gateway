@@ -1,5 +1,6 @@
 import { BatchStatus, CoaComplianceVerdict, DocStatus, DocType } from "@prisma/client";
 import { WorkflowAction } from "../../services/workflow.config";
+import type { SignatureLineageDto } from "../../utils/signature-lineage.mapper";
 
 export type DocumentAllowedAction = WorkflowAction;
 
@@ -44,4 +45,5 @@ export type DocumentDetailDto = {
   };
   coaResults: CoaResultDto[];
   allowedActions: DocumentAllowedAction[];
+  signatureLineage: SignatureLineageDto;
 };

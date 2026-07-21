@@ -25,7 +25,7 @@ export const getCoaById = asyncHandler(async (req: AuthenticatedRequest, res: Re
 
 export const downloadCoa = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
   const { id } = req.params;
-  await downloadMarketingCoaPdf(id);
+  await downloadMarketingCoaPdf(id, req.user, res, req.ip);
 });
 
 export const getBatchById = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {

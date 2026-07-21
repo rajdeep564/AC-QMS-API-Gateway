@@ -25,6 +25,8 @@ export enum AuditAction {
   ASSIGN = "ASSIGN",
   SUPERSEDE = "SUPERSEDE",
   REVISE = "REVISE",
+  AWS_MANAGER_EDIT = "AWS_MANAGER_EDIT",
+  RENDER_FAILED = "RENDER_FAILED",
 }
 
 export enum AuditEntityType {

@@ -12,6 +12,10 @@ const documentDetailInclude = {
       createdById: true,
     },
   },
+  createdBy: { select: { id: true, fullName: true } },
+  submittedBy: { select: { id: true, fullName: true } },
+  qcApprovedBy: { select: { id: true, fullName: true } },
+  qaSignedBy: { select: { id: true, fullName: true } },
   awsSections: {
     include: { specDocumentTest: true },
     orderBy: { specDocumentTest: { sortOrder: "asc" } },

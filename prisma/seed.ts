@@ -30,6 +30,7 @@ const USERS: {
   { fullName: "Priya Mehta", username: "priya.mehta", role: Role.QC_MGR, department: DeptName.QC },
   { fullName: "Anand Joshi", username: "anand.joshi", role: Role.QA_EXEC, department: DeptName.QA },
   { fullName: "Sanjay Reddy", username: "sanjay.reddy", role: Role.QA_MGR, department: DeptName.QA },
+  { fullName: "Diya Sharma", username: "diya.sharma", role: Role.MKT_EXEC, department: DeptName.MARKETING },
 ];
 
 async function seedDepartments() {

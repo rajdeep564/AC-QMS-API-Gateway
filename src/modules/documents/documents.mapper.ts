@@ -1,5 +1,9 @@
-import { DocStatus, DocType } from "@prisma/client";
-import { WorkflowAction } from "../../services/workflow.config";
+import { DocType } from "@prisma/client";
+import {
+  buildSignatureLineage,
+  SignatureLineageDto,
+} from "../../utils/signature-lineage.mapper";
+import { StageTimestamps } from "../../utils/signature-lineage-audit";
 import { DocumentDetail } from "./documents.repository";
 import { CoaResultDto, DocumentAllowedAction, DocumentDetailDto } from "./documents.types";
 
@@ -16,7 +20,19 @@ function toCoaResult(row: DocumentDetail["coaResults"][number]): CoaResultDto {
 export function toDocumentDetail(
   doc: DocumentDetail,
   allowedActions: DocumentAllowedAction[],
+  stageTimestamps?: StageTimestamps,
 ): DocumentDetailDto {
+  const signatureLineage: SignatureLineageDto = buildSignatureLineage({
+    authoredBy: doc.createdBy,
+    authoredAt: doc.createdAt,
+    submittedBy: doc.submittedBy,
+    submittedAt: stageTimestamps?.submittedAt ?? null,
+    qcApprovedBy: doc.qcApprovedBy,
+    qcApprovedAt: stageTimestamps?.qcApprovedAt ?? null,
+    qaSignedBy: doc.qaSignedBy,
+    qaSignedAt: stageTimestamps?.qaSignedAt ?? null,
+  });
+
   return {
     id: doc.id,
     batchId: doc.batchId,
@@ -37,5 +53,6 @@ export function toDocumentDetail(
     },
     coaResults: doc.docType === DocType.COA ? doc.coaResults.map(toCoaResult) : [],
     allowedActions: allowedActions,
+    signatureLineage,
   };
 }

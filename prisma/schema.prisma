@@ -118,6 +118,12 @@ enum FileType {
   READING_ATTACHMENT
 }
 
+enum RenderStatus {
+  PENDING
+  RENDERED
+  FAILED
+}
+
 enum CCStatus {
   DRAFT
   UNDER_REVIEW
@@ -203,6 +209,7 @@ model Product {
   productMasters ProductMaster[]
   specs          Spec[]
   batches        Batch[]
+  arnSequences   ArnSequence[]
 
   @@map("products")
 }
@@ -271,6 +278,8 @@ model Spec {
   approvedAt     DateTime?         @map("approved_at") @db.Timestamptz
   effectiveDate  DateTime?         @map("effective_date") @db.Date
   supersedesId   String?           @map("supersedes_id") @db.Uuid
+  renderStatus   RenderStatus      @default(PENDING) @map("render_status")
+  renderError    String?           @map("render_error")
   createdAt      DateTime          @default(now()) @map("created_at") @db.Timestamptz
 
   product      Product          @relation(fields: [productId], references: [id])
@@ -395,6 +404,8 @@ model BatchDocument {
   submittedById     String?               @map("submitted_by") @db.Uuid
   qcApprovedById    String?               @map("qc_approved_by") @db.Uuid
   qaSignedById      String?               @map("qa_signed_by") @db.Uuid
+  renderStatus      RenderStatus          @default(PENDING) @map("render_status")
+  renderError       String?               @map("render_error")
   createdAt         DateTime              @default(now()) @map("created_at") @db.Timestamptz
 
   batch        Batch            @relation(fields: [batchId], references: [id])
@@ -631,9 +642,13 @@ model Session {
 
 model ArnSequence {
   id        String   @id @default(uuid()) @db.Uuid
-  fy        String   @unique @db.VarChar(12)
+  fy        String   @db.VarChar(12)
+  productId String   @map("product_id") @db.Uuid
   seq       Int
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
+  product Product @relation(fields: [productId], references: [id])
+
+  @@unique([fy, productId])
   @@map("arn_sequences")
 }

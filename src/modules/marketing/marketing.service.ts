@@ -1,5 +1,12 @@
+import path from "path";
+import { FileType } from "@prisma/client";
+import type { Response } from "express";
 import { AppError } from "../../lib/app-error";
+import { prisma } from "../../lib/prisma-types";
 import { parsePagination } from "../../utils/pagination";
+import { AuditAction, AuditEntityType, log as auditLog } from "../../services/audit.service";
+import { getDocumentStorage } from "../../services/storage";
+import type { JwtAccessPayload } from "../../types/auth.types";
 import {
   toMarketingBatchDetail,
   toMarketingCoaDetail,
@@ -46,12 +53,57 @@ export async function getMarketingCoaById(coaId: string): Promise<MarketingCoaDe
   return toMarketingCoaDetail(coa);
 }
 
-export async function downloadMarketingCoaPdf(coaId: string): Promise<never> {
+/** US-15-1: audit COA download (EXPORT) only — list/detail/batch reads are not audited (system convention). */
+export async function downloadMarketingCoaPdf(
+  coaId: string,
+  actor: JwtAccessPayload,
+  res: Response,
+  ipAddress?: string,
+): Promise<void> {
   const coa = await marketingRepo.findIssuedCoaById(coaId);
   if (!coa) {
     throw AppError.notFound("COA");
   }
-  throw AppError.notImplemented("COA PDF download is pending Epic 21 SOP-on-SOP styling");
+
+  const pdf = await prisma.fileAttachment.findFirst({
+    where: { batchDocumentId: coaId, fileType: FileType.PDF },
+    orderBy: { createdAt: "desc" },
+  });
+  if (!pdf) {
+    throw AppError.notFound("COA PDF");
+  }
+
+  const storage = getDocumentStorage();
+  if (!(await storage.exists(pdf.filePath))) {
+    throw AppError.notFound("COA PDF");
+  }
+
+  const bytes = await storage.read(pdf.filePath);
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="${path.basename(pdf.filePath)}"`,
+  );
+  res.setHeader("Content-Length", String(bytes.length));
+  res.end(bytes);
+
+  const actorUser = await prisma.user.findUnique({
+    where: { id: actor.userId },
+    select: { fullName: true, department: { select: { name: true } } },
+  });
+
+  await auditLog({
+    userId: actor.userId,
+    userName: actorUser?.fullName,
+    role: actor.role,
+    department: actorUser?.department?.name,
+    action: AuditAction.EXPORT,
+    entityType: AuditEntityType.COA,
+    entityId: coa.id,
+    docNo: coa.docNo,
+    ipAddress,
+    comment: `Marketing COA download ${coa.docNo} (batch ${coa.batch.batchNo})`,
+  });
 }
 
 export async function getMarketingBatchById(batchId: string): Promise<MarketingBatchDetailDto> {

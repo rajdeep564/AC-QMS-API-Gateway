@@ -13,6 +13,7 @@ import { CreateSpecBody, ListSpecsQuery, PatchSpecBody, ReviseSpecBody } from ".
 import {
   MoaDocDto,
   MoaSectionDto,
+  ActiveSpecDto,
   SpecApprovalQueueItemDto,
   SpecDetailDto,
   SpecListItemDto,
@@ -21,6 +22,8 @@ import {
 } from "./specs.types";
 import * as specsRepo from "./specs.repository";
 import { validateSpecContentAtSave } from "./specs.validation";
+import { buildSignatureLineage } from "../../utils/signature-lineage.mapper";
+import { loadStageTimestampsFromAudit } from "../../utils/signature-lineage-audit";
 
 type SpecWithDetails = NonNullable<Awaited<ReturnType<typeof specsRepo.findSpecWithDetails>>>;
 
@@ -65,7 +68,10 @@ function toMoaSectionDto(section: NonNullable<SpecWithDetails["moaDoc"]>["sectio
   };
 }
 
-function toMoaDto(moa: SpecWithDetails["moaDoc"]): MoaDocDto | null {
+function toMoaDto(
+  moa: SpecWithDetails["moaDoc"],
+  signatureLineage?: ReturnType<typeof buildSignatureLineage> | null,
+): MoaDocDto | null {
   if (!moa) return null;
   return {
     id: moa.id,
@@ -73,10 +79,28 @@ function toMoaDto(moa: SpecWithDetails["moaDoc"]): MoaDocDto | null {
     revisionNo: moa.revisionNo,
     status: moa.status,
     sections: moa.sections.map(toMoaSectionDto),
+    signatureLineage: signatureLineage ?? null,
   };
 }
 
-function toSpecDetail(spec: SpecWithDetails, actor: JwtAccessPayload): SpecDetailDto {
+function toSpecDetail(
+  spec: SpecWithDetails,
+  actor: JwtAccessPayload,
+  signatureLineage?: ReturnType<typeof buildSignatureLineage>,
+): SpecDetailDto {
+  const lineage =
+    signatureLineage ??
+    buildSignatureLineage({
+      authoredBy: spec.createdBy,
+      authoredAt: spec.createdAt,
+      submittedBy: spec.submittedBy,
+      submittedAt: null,
+      qcApprovedBy: spec.qcApprovedBy,
+      qcApprovedAt: null,
+      qaSignedBy: spec.qaSignedBy,
+      qaSignedAt: spec.approvedAt,
+    });
+
   return {
     id: spec.id,
     productId: spec.productId,
@@ -92,8 +116,11 @@ function toSpecDetail(spec: SpecWithDetails, actor: JwtAccessPayload): SpecDetai
     approvedAt: spec.approvedAt,
     effectiveDate: spec.effectiveDate,
     createdAt: spec.createdAt,
+    renderStatus: spec.renderStatus,
+    renderError: spec.renderError,
     tests: spec.specTests.map(toTestDto),
-    moa: toMoaDto(spec.moaDoc),
+    moa: toMoaDto(spec.moaDoc, lineage),
+    signatureLineage: lineage,
     allowedActions: getAllowedActions(
       "STANDING_SPEC",
       spec.status as Parameters<typeof getAllowedActions>[1],
@@ -136,6 +163,18 @@ async function buildActorAuditFields(actor: JwtAccessPayload) {
     role: actor.role,
     department: actorUser?.department?.name,
   };
+}
+
+export async function listActiveSpecsForProduct(
+  productId: string,
+  variant: SpecVariant = SpecVariant.GENERAL,
+): Promise<ActiveSpecDto[]> {
+  const product = await mastersRepo.findProductById(productId);
+  if (!product) {
+    throw AppError.notFound("Product");
+  }
+
+  return specsRepo.listActiveSpecs(productId, variant);
 }
 
 export async function listSpecsForProduct(
@@ -256,11 +295,8 @@ export async function createSpec(
 
   await assertNoInFlightRevision(productId, body.variant);
 
-  const batchReady = await specsRepo.findBatchReadySpec(productId, body.variant);
-  if (batchReady) {
-    throw AppError.conflict("A signed SPEC already exists — use revise to create a new revision");
-  }
-
+  // C-1: multiple concurrent QA_SIGNED SPECs are allowed; create still
+  // requires revise for revision > 1 via the existing aggregate guard.
   const existing = await specsRepo.aggregateRevisionNo(productId, body.variant);
   if ((existing._max.revisionNo ?? 0) > 0) {
     throw AppError.conflict("A SPEC already exists for this product — use revise after signing");
@@ -312,7 +348,18 @@ export async function getSpecDetail(specId: string, actor: JwtAccessPayload): Pr
   if (!spec) {
     throw AppError.notFound("Standing SPEC");
   }
-  return toSpecDetail(spec, actor);
+  const stageTimestamps = await loadStageTimestampsFromAudit(AuditEntityType.SPEC, spec.id);
+  const lineage = buildSignatureLineage({
+    authoredBy: spec.createdBy,
+    authoredAt: spec.createdAt,
+    submittedBy: spec.submittedBy,
+    submittedAt: stageTimestamps.submittedAt,
+    qcApprovedBy: spec.qcApprovedBy,
+    qcApprovedAt: stageTimestamps.qcApprovedAt,
+    qaSignedBy: spec.qaSignedBy,
+    qaSignedAt: spec.approvedAt ?? stageTimestamps.qaSignedAt,
+  });
+  return toSpecDetail(spec, actor, lineage);
 }
 
 export async function patchSpec(

@@ -8,6 +8,7 @@ import {
   approveSpec,
   createSpec,
   getSpecDetail,
+  listActiveSpecsForProduct,
   listSpecApprovalQueue,
   listSpecSignatureQueue,
   listSpecsForProduct,
@@ -17,6 +18,12 @@ import {
   signSpec,
   submitSpec,
 } from "./specs.service";
+
+export const listActiveSpecs = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const { id, productId } = req.params;
+  const specs = await listActiveSpecsForProduct(productId ?? id);
+  res.json(ok(specs));
+});
 
 export const listForProduct = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
   const { id, productId } = req.params;

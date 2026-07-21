@@ -250,7 +250,7 @@ async function main() {
   );
   if (secondRevise) failures.push(secondRevise);
 
-  // 14 — New revision through workflow → supersede prior
+  // 14 — New revision through workflow → C-1: prior stays QA_SIGNED (supersede optional)
   await submitSpec(revision.id, actor(kavya.id, Role.QC_EXEC, kavya.departmentId));
   await approveSpec(
     revision.id,
@@ -267,11 +267,11 @@ async function main() {
     where: { id: created.id },
     include: { moaDoc: true },
   });
-  if (oldSpec?.status !== StandingDocStatus.SUPERSEDED) {
-    failures.push("Supersede-on-sign: prior SPEC should be SUPERSEDED");
+  if (oldSpec?.status !== StandingDocStatus.QA_SIGNED) {
+    failures.push("C-1: prior SPEC should remain QA_SIGNED after new revision signs (supersede optional)");
   }
-  if (oldSpec?.moaDoc?.status !== StandingDocStatus.SUPERSEDED) {
-    failures.push("Supersede-on-sign: prior MOA should be SUPERSEDED");
+  if (oldSpec?.moaDoc?.status !== StandingDocStatus.QA_SIGNED) {
+    failures.push("C-1: prior MOA should remain QA_SIGNED after new revision signs");
   }
 
   const qaSignedCount = await prisma.spec.count({
@@ -281,13 +281,13 @@ async function main() {
       status: StandingDocStatus.QA_SIGNED,
     },
   });
-  if (qaSignedCount !== 1) {
-    failures.push(`Expected exactly 1 QA_SIGNED spec, found ${qaSignedCount}`);
+  if (qaSignedCount !== 2) {
+    failures.push(`C-1: expected 2 concurrent QA_SIGNED specs, found ${qaSignedCount}`);
   }
 
   const batchReadyAfter = await findBatchReadySpec(verifierProduct.id);
   if (!batchReadyAfter || batchReadyAfter.id !== revision.id) {
-    failures.push("After sign, batch-ready should be new revision");
+    failures.push("After sign, batch-ready (latest) should be new revision");
   }
 
   report(failures);

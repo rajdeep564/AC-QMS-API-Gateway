@@ -78,6 +78,24 @@ export function assertEditableAwsDocument(section: AwsSectionDetail): void {
   }
 }
 
+/** C-4: QC Manager may edit while AWS is not yet QA_SIGNED. */
+export function assertManagerEditableAwsDocument(section: AwsSectionDetail): void {
+  assertAwsBatchReady(section);
+  if (section.batchDocument.docType !== DocType.AWS) {
+    throw AppError.notFound("AWS section");
+  }
+  if (section.batchDocument.status === DocStatus.QA_SIGNED) {
+    throw AppError.conflict("AWS document cannot be edited after QA signature");
+  }
+  if (
+    section.batchDocument.status !== DocStatus.DRAFT &&
+    section.batchDocument.status !== DocStatus.SUBMITTED &&
+    section.batchDocument.status !== DocStatus.QC_APPROVED
+  ) {
+    throw AppError.conflict("AWS document is not open for manager edit");
+  }
+}
+
 export function assertAnalystEditableStatus(section: AwsSectionDetail): void {
   if (
     section.status === SectionStatus.AWAITING_CHECK ||

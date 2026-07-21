@@ -67,8 +67,8 @@ async function main() {
   }
 
   const userCount = await prisma.user.count({ where: { deletedAt: null } });
-  if (userCount !== 6) {
-    failures.push(`Expected 6 users, found ${userCount}`);
+  if (userCount !== 7) {
+    failures.push(`Expected 7 users, found ${userCount}`);
   }
 
   const rajesh = await prisma.user.findFirst({
@@ -76,6 +76,13 @@ async function main() {
   });
   if (!rajesh) {
     failures.push("Rajesh Kumar (SADMIN) not found");
+  }
+
+  const diya = await prisma.user.findFirst({
+    where: { username: "diya.sharma", role: Role.MKT_EXEC },
+  });
+  if (!diya) {
+    failures.push("Diya Sharma (MKT_EXEC) not found");
   }
 
   const glycine = await prisma.product.findFirst({ where: { name: "Glycine" } });

@@ -4,16 +4,49 @@ import { ok } from "../../lib/api-response";
 import type { AuthenticatedRequest } from "../../types/authenticated-request";
 import type { RejectBody, SubmitDocumentBody, TransitionBody } from "../masters/masters.schema";
 import {
+  downloadAttachment,
+  listBatchDocuments,
+  listSpecDocuments,
+  retryBatchDocumentRender,
+  retrySpecRender,
+} from "./attachments.service";
+import {
   getDocumentDetail,
   listAwsApprovalQueue,
   signAndIssueCoa,
   transitionDocument,
 } from "./documents.service";
+import { getDocumentExplorerTree } from "./explorer.service";
 
 export const listAwsApprovalQueueHandler = asyncHandler(
   async (req: AuthenticatedRequest, res: Response) => {
     const queue = await listAwsApprovalQueue(req.user);
     res.json(ok(queue));
+  },
+);
+
+export const getExplorerHandler = asyncHandler(
+  async (req: AuthenticatedRequest, res: Response) => {
+    const productId =
+      typeof req.query.productId === "string" ? req.query.productId : undefined;
+    const batchId =
+      typeof req.query.batchId === "string" ? req.query.batchId : undefined;
+    const rawDocType =
+      typeof req.query.docType === "string" ? req.query.docType.toUpperCase() : undefined;
+    const docType =
+      rawDocType === "SPEC" ||
+      rawDocType === "MOA" ||
+      rawDocType === "AWS" ||
+      rawDocType === "COA"
+        ? rawDocType
+        : undefined;
+
+    const tree = await getDocumentExplorerTree(req.user, {
+      productId,
+      batchId,
+      docType,
+    });
+    res.json(ok(tree));
   },
 );
 
@@ -64,3 +97,42 @@ export const reject = asyncHandler(async (req: AuthenticatedRequest, res: Respon
   );
   res.json(ok(updated));
 });
+
+export const downloadAttachmentHandler = asyncHandler(
+  async (req: AuthenticatedRequest, res: Response) => {
+    const { id } = req.params;
+    await downloadAttachment(id, req.user, res);
+  },
+);
+
+export const listBatchDocumentsHandler = asyncHandler(
+  async (req: AuthenticatedRequest, res: Response) => {
+    const { id } = req.params;
+    const result = await listBatchDocuments(id, req.user);
+    res.json(ok(result));
+  },
+);
+
+export const listSpecDocumentsHandler = asyncHandler(
+  async (req: AuthenticatedRequest, res: Response) => {
+    const { id } = req.params;
+    const result = await listSpecDocuments(id, req.user);
+    res.json(ok(result));
+  },
+);
+
+export const retryDocumentRenderHandler = asyncHandler(
+  async (req: AuthenticatedRequest, res: Response) => {
+    const { batchDocumentId } = req.params;
+    const result = await retryBatchDocumentRender(batchDocumentId, req.user);
+    res.json(ok(result));
+  },
+);
+
+export const retrySpecRenderHandler = asyncHandler(
+  async (req: AuthenticatedRequest, res: Response) => {
+    const { id } = req.params;
+    const result = await retrySpecRender(id, req.user);
+    res.json(ok(result));
+  },
+);

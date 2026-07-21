@@ -28,6 +28,14 @@ const envSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]),
   DOC_MODULE_URL: z.string().url(),
   DOC_MODULE_API_KEY: z.string().min(1),
+  DOC_MODULE_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+  DOC_MODULE_PDF_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
+  /** When true, DOCX-only is accepted if LibreOffice PDF convert is unavailable. */
+  DOC_MODULE_PDF_OPTIONAL: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
+  DOCUMENT_STORAGE_ROOT: z.string().min(1).default("./storage/documents"),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -51,4 +59,8 @@ export const config = {
   isProduction: env.NODE_ENV === "production",
   docModuleUrl: env.DOC_MODULE_URL,
   docModuleApiKey: env.DOC_MODULE_API_KEY,
+  docModuleTimeoutMs: env.DOC_MODULE_TIMEOUT_MS,
+  docModulePdfTimeoutMs: env.DOC_MODULE_PDF_TIMEOUT_MS,
+  docModulePdfOptional: env.DOC_MODULE_PDF_OPTIONAL,
+  documentStorageRoot: env.DOCUMENT_STORAGE_ROOT,
 } as const;

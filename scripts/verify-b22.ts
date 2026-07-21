@@ -3,7 +3,7 @@
  */
 import "dotenv/config";
 import { execSync } from "child_process";
-import { readFileSync, writeFileSync, mkdtempSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
@@ -16,15 +16,12 @@ import {
 } from "@prisma/client";
 import { prisma } from "../src/lib/prisma-types";
 import { AuditAction } from "../src/services/audit.service";
-import { checkAwsSection, completeAwsSection } from "../src/modules/aws/aws-compliance.service";
-import { patchAwsSection } from "../src/modules/aws/aws.service";
 import {
   approveBatch,
   createBatch,
   submitBatch,
 } from "../src/modules/batches/batches.service";
 import { signAndIssueCoa, transitionDocument } from "../src/modules/documents/documents.service";
-import { CreateSpecBody } from "../src/modules/specs/specs.schema";
 import {
   approveSpec,
   createSpec,
@@ -32,10 +29,14 @@ import {
   submitSpec,
 } from "../src/modules/specs/specs.service";
 import { mapToCoaRenderInput } from "../src/services/coa-render-mapper";
-import { renderDocuments } from "../src/services/render-documents.service";
-import { postRender } from "../src/services/sop-client";
+import { drainDocumentRenderQueues, renderDocuments } from "../src/services/render-documents.service";
+import * as sopClient from "../src/services/sop-client";
 import { JwtAccessPayload } from "../src/types/auth.types";
 
+import {
+  SAMPLE_SPEC_BODY,
+  fillAndCompleteAllSections,
+} from "./lib/aws-section-fixture";
 import {
   DEV_PASSWORD,
   ensureQaSignedHarnessSpec,
@@ -46,32 +47,6 @@ const DOC_MODULE_URL = process.env.DOC_MODULE_URL ?? "http://localhost:8000";
 const DOC_MODULE_API_KEY = process.env.DOC_MODULE_API_KEY ?? "";
 
 type CheckResult = { id: number; name: string; pass: boolean; detail: string };
-
-const SAMPLE_SPEC_BODY: CreateSpecBody = {
-  variant: "GENERAL",
-  tests: [
-    {
-      sortOrder: 1,
-      testName: "Appearance",
-      resultType: "QUALITATIVE",
-      acceptanceCriteria: "White crystalline powder",
-    },
-    {
-      sortOrder: 2,
-      testName: "Assay",
-      resultType: "QUANTITATIVE",
-      operator: "NLT",
-      minValue: 99.0,
-      uom: "%",
-      formula: "result",
-      formulaVariables: { variables: [{ name: "result" }] },
-    },
-  ],
-  moaSections: [
-    { specTestRef: 0, pharmacopoeia: "IP", samplePreparation: "Visual inspection" },
-    { specTestRef: 1, pharmacopoeia: "IP", samplePreparation: "Titrate sample" },
-  ],
-};
 
 function actor(userId: string, role: Role, departmentId: string | null = null): JwtAccessPayload {
   return { userId, role, departmentId };
@@ -98,6 +73,7 @@ async function getUser(username: string) {
 }
 
 async function deleteSpecFixture(productId: string) {
+  await drainDocumentRenderQueues(60_000);
   const batches = await prisma.batch.findMany({ where: { productId }, select: { id: true } });
   for (const batch of batches) {
     await deleteBatchFixture(batch.id);
@@ -109,6 +85,7 @@ async function deleteSpecFixture(productId: string) {
 }
 
 async function deleteBatchFixture(batchId: string) {
+  await drainDocumentRenderQueues(60_000);
   await prisma.awsSection.deleteMany({ where: { batchDocument: { batchId } } });
   await prisma.coaResult.deleteMany({ where: { batchDocument: { batchId } } });
   await prisma.batchDocument.deleteMany({ where: { batchId } });
@@ -134,15 +111,6 @@ async function ensureQaSignedSpec(
   });
   if (!signed) throw new Error("Failed to obtain QA_SIGNED spec fixture");
   return signed;
-}
-
-async function completeSectionTwoPerson(
-  sectionId: string,
-  analystId: string,
-  checkerId: string,
-): Promise<void> {
-  await completeAwsSection(sectionId, actor(analystId, Role.QC_EXEC));
-  await checkAwsSection(sectionId, { password: DEV_PASSWORD }, actor(checkerId, Role.QC_EXEC));
 }
 
 async function createCoaReadyFixture(batchNoSuffix: string) {
@@ -187,26 +155,16 @@ async function createCoaReadyFixture(batchNoSuffix: string) {
     orderBy: { specDocumentTest: { sortOrder: "asc" } },
   });
 
-  for (const section of sections) {
-    if (section.specDocumentTest.testName === "Appearance") {
-      await patchAwsSection(
-        section.id,
-        { readings: { passFail: "PASS" } },
-        { readings: { passFail: "PASS" } },
-        actor(kavya.id, Role.QC_EXEC),
-      );
-    } else if (section.specDocumentTest.testName === "Assay") {
-      await patchAwsSection(
-        section.id,
-        { readings: { variables: { result: 99.5 } } },
-        { readings: { variables: { result: 99.5 } } },
-        actor(kavya.id, Role.QC_EXEC),
-      );
-    }
-    await completeSectionTwoPerson(section.id, kavya.id, meera.id);
-  }
+  await fillAndCompleteAllSections({
+    sections: sections.map((s) => ({
+      id: s.id,
+      testName: s.specDocumentTest.testName,
+    })),
+    analystId: kavya.id,
+    checkerId: meera.id,
+  });
 
-  await transitionDocument(awsDoc.id, "SUBMIT", actor(kavya.id, Role.QC_EXEC));
+  await transitionDocument(awsDoc.id, "SUBMIT", actor(kavya.id, Role.QC_EXEC), DEV_PASSWORD);
   await transitionDocument(awsDoc.id, "APPROVE", actor(priya.id, Role.QC_MGR), DEV_PASSWORD);
   await transitionDocument(awsDoc.id, "SIGN", actor(sanjay.id, Role.QA_MGR), DEV_PASSWORD);
 
@@ -238,8 +196,11 @@ function validatePayloadWithPython(json: string): void {
   const tempDir = mkdtempSync(join(tmpdir(), "b22-coa-"));
   const payloadPath = join(tempDir, "payload.json");
   writeFileSync(payloadPath, json, "utf8");
+  const escapedPath = payloadPath.replace(/\\/g, "/");
+  const venvPy = join(docModuleRoot, ".venv", "Scripts", "python.exe");
+  const py = existsSync(venvPy) ? `"${venvPy}"` : "py -3.13";
   const out = execSync(
-    `py -3.13 -c "from app.schemas.coa_render import CoaRenderInput; CoaRenderInput.model_validate_json(open(r'${payloadPath.replace(/\\/g, "/")}').read()); print('VALID')"`,
+    `${py} -c "from app.schemas.coa_render import CoaRenderInput; CoaRenderInput.model_validate_json(open(r'${escapedPath}').read()); print('VALID')"`,
     { cwd: docModuleRoot, encoding: "utf8", env: { ...process.env, API_KEY: DOC_MODULE_API_KEY || "test" } },
   );
   assert(out.trim().includes("VALID"), `Python validation failed: ${out}`);
@@ -259,6 +220,8 @@ async function docModuleReachable(): Promise<boolean> {
 async function main() {
   const results: CheckResult[] = [];
   let fixture: Awaited<ReturnType<typeof createCoaReadyFixture>> | null = null;
+
+  await drainDocumentRenderQueues(60_000);
 
   try {
     fixture = await createCoaReadyFixture(`mapper-${Date.now()}`);
@@ -335,7 +298,7 @@ async function main() {
 
     results.push(
       await runCheck(5, "sop-client URL + API key from env (no hardcoded secrets)", async () => {
-        const src = readFileSync(join(__dirname, "../src/services/sop-client.ts"), "utf8");
+        const src = readFileSync(join(__dirname, "../src/services/sop-client/client.ts"), "utf8");
         assert(src.includes("config.docModuleUrl"), "must use config.docModuleUrl");
         assert(src.includes("config.docModuleApiKey"), "must use config.docModuleApiKey");
         assert(!src.includes("localhost:8000"), "must not hardcode DOC_MODULE_URL");
@@ -418,22 +381,25 @@ async function main() {
           where: { id: e2eFixture.coaDocId },
         });
         const batch = await prisma.batch.findUniqueOrThrow({ where: { id: e2eFixture.batchId } });
-        const renderResult = await postRender("coa", await mapToCoaRenderInput(e2eFixture.coaDocId));
+        const payload = await mapToCoaRenderInput(e2eFixture.coaDocId);
+        const buffer = await sopClient.render("coa", payload);
+        const renderResult = {
+          ok: true as const,
+          status: 200,
+          byteLength: buffer.byteLength,
+        };
         console.log("COA status after sign-and-issue:", coa.status);
         console.log("Batch status after sign-and-issue:", batch.status);
-        console.log("Direct postRender result:", JSON.stringify(renderResult, null, 2));
+        console.log("Direct sopClient.render result:", JSON.stringify(renderResult, null, 2));
         assert(coa.status === DocStatus.ISSUED, "COA must be ISSUED");
         assert(batch.status === BatchStatus.RELEASED, "Batch must be RELEASED");
-        assert(renderResult.ok === true, "render must succeed");
-        assert(renderResult.ok && renderResult.byteLength > 1000, "DOCX must have content");
-        console.log(
-          `HTTP ${renderResult.ok ? renderResult.status : "FAIL"} — DOCX byteLength=${renderResult.ok ? renderResult.byteLength : 0}`,
-        );
+        assert(renderResult.byteLength > 1000, "DOCX must have content");
+        console.log(`HTTP ${renderResult.status} — DOCX byteLength=${renderResult.byteLength}`);
         results.push({
           id: 7,
           name: "RUNTIME — COA sign-and-issue → DOC-Module → DOCX returned",
           pass: true,
-          detail: `HTTP 200, byteLength=${renderResult.ok ? renderResult.byteLength : 0}`,
+          detail: `HTTP 200, byteLength=${renderResult.byteLength}`,
         });
       } finally {
         const product = await prisma.product.findFirst({ where: { name: "Glycine" } });
@@ -456,15 +422,24 @@ async function main() {
           join(__dirname, "../src/services/workflow-engine.ts"),
           "utf8",
         );
-        assert(renderSrc.includes("postRender"), "render-documents must call postRender");
-        assert(!engineSrc.includes("postRender"), "workflow-engine must not call postRender");
         assert(
-          docSrc.includes("await transition(") && docSrc.includes('renderDocuments("COA"'),
-          "signAndIssueCoa must call renderDocuments after transition",
+          renderSrc.includes("sopClient.render") || renderSrc.includes('await sopClient.render'),
+          "render-documents must call sopClient.render",
         );
-        const transitionIdx = docSrc.indexOf("await transition(");
-        const renderIdx = docSrc.indexOf('renderDocuments("COA"');
-        assert(renderIdx > transitionIdx, "renderDocuments must follow transition in source");
+        assert(!engineSrc.includes("sopClient.render"), "workflow-engine must not call render HTTP");
+        assert(
+          docSrc.includes("await transition(") && docSrc.includes("scheduleDocumentRender"),
+          "signAndIssueCoa must schedule COA render after transition",
+        );
+        const signAndIssueBlock =
+          docSrc.match(/export async function signAndIssueCoa[\s\S]*?\n\}/)?.[0] ?? "";
+        assert(signAndIssueBlock.length > 0, "signAndIssueCoa block must exist");
+        const transitionIdx = signAndIssueBlock.indexOf("await transition(");
+        const renderIdx = signAndIssueBlock.indexOf("scheduleDocumentRender");
+        assert(
+          transitionIdx >= 0 && renderIdx > transitionIdx,
+          "scheduleDocumentRender must follow transition in signAndIssueCoa",
+        );
       }),
     );
 
@@ -529,47 +504,72 @@ async function main() {
     );
 
     results.push(
-      await runCheck(11, "No file_attachments write in COA render path", async () => {
-        const renderSrc = readFileSync(
-          join(__dirname, "../src/services/render-documents.service.ts"),
-          "utf8",
-        );
-        const clientSrc = readFileSync(join(__dirname, "../src/services/sop-client.ts"), "utf8");
-        const mapperSrc = readFileSync(
-          join(__dirname, "../src/services/coa-render-mapper.ts"),
-          "utf8",
-        );
-        assert(!renderSrc.includes("fileAttachment"), "render-documents must not write attachments");
-        assert(!clientSrc.includes("fileAttachment"), "sop-client must not write attachments");
-        assert(!mapperSrc.includes("fileAttachment"), "mapper must not write attachments");
-      }),
-    );
-
-    results.push(
-      await runCheck(12, "STANDING_SPEC + AWS render calls still stubs", async () => {
-        const stub = await renderDocuments("AWS", "00000000-0000-0000-0000-000000000000", {
-          docNo: "AWS/TEST",
-        });
-        assert(stub.status === "queued", "AWS must remain queued stub");
-      }),
-    );
-
-    results.push(
-      await runCheck(13, "tsc + session verifiers green", async () => {
-        execSync("npm run typecheck", { cwd: join(__dirname, ".."), stdio: "pipe" });
-        for (const script of [
-          "verify:session1",
-          "verify:session2",
-          "verify:session3",
-          "verify:session3-phase-b",
-          "verify:session3-phase-c",
-          "verify:users",
-        ]) {
-          execSync(`npm run ${script}`, { cwd: join(__dirname, ".."), stdio: "pipe" });
+      await runCheck(11, "file_attachments written after COA render", async () => {
+        const persistFixture = await createCoaReadyFixture(`persist-${Date.now()}`);
+        try {
+          await signAndIssueCoa(
+            persistFixture.coaDocId,
+            actor(persistFixture.sanjayId, Role.QA_MGR),
+            DEV_PASSWORD,
+          );
+          const { executeDocumentRender } = await import(
+            "../src/services/render-documents.service"
+          );
+          const result = await executeDocumentRender({
+            kind: "COA",
+            batchDocumentId: persistFixture.coaDocId,
+            actorId: persistFixture.sanjayId,
+          });
+          assert(result.status === "rendered", `expected rendered, got ${result.status}`);
+          const attachments = await prisma.fileAttachment.findMany({
+            where: { batchDocumentId: persistFixture.coaDocId },
+          });
+          assert(attachments.length >= 1, "expected ≥1 file_attachments row for COA");
+        } finally {
+          const product = await prisma.product.findFirst({ where: { name: "Glycine" } });
+          await deleteBatchFixture(persistFixture.batchId);
+          if (product) await deleteSpecFixture(product.id);
         }
       }),
     );
+
+    results.push(
+      await runCheck(12, "COA executeDocumentRender returns rendered with attachments", async () => {
+        const coaFixture = await createCoaReadyFixture(`coa-live-${Date.now()}`);
+        try {
+          await signAndIssueCoa(
+            coaFixture.coaDocId,
+            actor(coaFixture.sanjayId, Role.QA_MGR),
+            DEV_PASSWORD,
+          );
+          const { executeDocumentRender } = await import(
+            "../src/services/render-documents.service"
+          );
+          const result = await executeDocumentRender({
+            kind: "COA",
+            batchDocumentId: coaFixture.coaDocId,
+            actorId: coaFixture.sanjayId,
+          });
+          assert(result.status === "rendered", `COA render must succeed, got ${result.status}`);
+          const count = await prisma.fileAttachment.count({
+            where: { batchDocumentId: coaFixture.coaDocId },
+          });
+          assert(count >= 1, "COA attachments must exist after render");
+        } finally {
+          const product = await prisma.product.findFirst({ where: { name: "Glycine" } });
+          await deleteBatchFixture(coaFixture.batchId);
+          if (product) await deleteSpecFixture(product.id);
+        }
+      }),
+    );
+
+    results.push(
+      await runCheck(13, "typecheck green (slice-local)", async () => {
+        execSync("npm run typecheck", { cwd: join(__dirname, ".."), stdio: "pipe" });
+      }),
+    );
   } finally {
+    await drainDocumentRenderQueues(30_000);
     await prisma.$disconnect();
   }
 

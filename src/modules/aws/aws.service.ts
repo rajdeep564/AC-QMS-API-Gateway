@@ -3,6 +3,7 @@ import {
   DocType,
   Prisma,
   ResultType,
+  Role,
   SectionStatus,
 } from "@prisma/client";
 import { prisma } from "../../lib/prisma-types";
@@ -24,11 +25,12 @@ import {
   assertAnalystEditableStatus,
   assertEditableAwsDocument,
   assertAwsDocumentReady,
+  assertManagerEditableAwsDocument,
   assertSectionAssignee,
   rejectClientComputedFields,
 } from "./aws-guards";
 import { toAwsSectionDetail, toAwsSectionsListResponse } from "./aws.mapper";
-import { PatchAwsSectionBody, PreviewAwsSectionBody } from "./aws.schema";
+import { PatchAwsSectionBody, PatchAwsSectionByManagerBody, PreviewAwsSectionBody } from "./aws.schema";
 import {
   AwsSectionDetailDto,
   AwsSectionPreviewDto,
@@ -271,6 +273,151 @@ export async function patchAwsSection(
       },
       tx,
     );
+
+    return row;
+  });
+
+  return toAwsSectionDetail(updated, actor);
+}
+
+/**
+ * C-4 / US-12-18: QC Manager may edit AWS section data pre-QA-sign.
+ * Backend recomputes; each field change is audit-logged with mandatory reason.
+ */
+export async function patchAwsSectionByManager(
+  awsDocId: string,
+  sectionId: string,
+  body: PatchAwsSectionByManagerBody,
+  rawBody: Record<string, unknown>,
+  actor: JwtAccessPayload,
+  ipAddress?: string,
+): Promise<AwsSectionDetailDto> {
+  if (actor.role !== Role.QC_MGR && actor.role !== Role.SADMIN) {
+    throw AppError.forbidden("Only QC Manager can edit AWS sections pre-QA-sign");
+  }
+
+  rejectClientComputedFields(rawBody);
+
+  if (!body.reason?.trim()) {
+    throw AppError.validation("Change reason is required");
+  }
+
+  const section = await awsRepo.findAwsSectionById(sectionId);
+  if (!section) {
+    throw AppError.notFound("AWS section");
+  }
+  if (section.batchDocumentId !== awsDocId) {
+    throw AppError.notFound("AWS section");
+  }
+
+  assertManagerEditableAwsDocument(section);
+
+  const mergedReadings =
+    body.readings !== undefined ? body.readings : section.readings;
+  const recompute = recomputeSection(section, mergedReadings);
+
+  const updateData: Prisma.AwsSectionUpdateInput = {
+    status: recompute.status,
+    calculatedResult: recompute.calculatedResult,
+    resultDisplay: recompute.resultDisplay,
+    conclusion: recompute.conclusion,
+    isOos: recompute.isOos,
+  };
+
+  if (body.readings !== undefined) {
+    updateData.readings = clearExpiryAcks(body.readings) as Prisma.InputJsonValue;
+  }
+
+  if (body.instrumentId !== undefined) {
+    updateData.instrument = body.instrumentId
+      ? { connect: { id: body.instrumentId } }
+      : { disconnect: true };
+    if (body.readings === undefined && section.readings) {
+      updateData.readings = clearExpiryAcks(section.readings) as Prisma.InputJsonValue;
+    }
+  }
+
+  if (body.reagentId !== undefined) {
+    updateData.reagent = body.reagentId
+      ? { connect: { id: body.reagentId } }
+      : { disconnect: true };
+    if (body.readings === undefined && section.readings) {
+      updateData.readings = clearExpiryAcks(section.readings) as Prisma.InputJsonValue;
+    }
+  }
+
+  updateData.oosAcknowledged = false;
+  updateData.oosAcknowledgedAt = null;
+  updateData.oosAckComment = null;
+
+  const changes: Array<{ field: string; oldValue: string | null; newValue: string | null }> = [];
+  if (body.readings !== undefined) {
+    changes.push({
+      field: "readings",
+      oldValue: JSON.stringify(section.readings),
+      newValue: JSON.stringify(body.readings),
+    });
+  }
+  if (body.instrumentId !== undefined && body.instrumentId !== section.instrumentId) {
+    changes.push({
+      field: "instrumentId",
+      oldValue: section.instrumentId,
+      newValue: body.instrumentId,
+    });
+  }
+  if (body.reagentId !== undefined && body.reagentId !== section.reagentId) {
+    changes.push({
+      field: "reagentId",
+      oldValue: section.reagentId,
+      newValue: body.reagentId,
+    });
+  }
+  const oldCalc = section.calculatedResult?.toString() ?? null;
+  const newCalc = recompute.calculatedResult?.toString() ?? null;
+  if (oldCalc !== newCalc) {
+    changes.push({
+      field: "calculatedResult",
+      oldValue: oldCalc,
+      newValue: newCalc,
+    });
+  }
+  const oldConc = section.conclusion ?? null;
+  if (oldConc !== recompute.conclusion) {
+    changes.push({
+      field: "conclusion",
+      oldValue: oldConc,
+      newValue: recompute.conclusion,
+    });
+  }
+
+  if (changes.length === 0) {
+    throw AppError.validation("No editable fields provided");
+  }
+
+  const updated = await prisma.$transaction(async (tx) => {
+    const row = await awsRepo.updateAwsSection(sectionId, updateData, tx);
+    const actorUser = await getUserById(actor.userId);
+
+    for (const change of changes) {
+      await auditLog(
+        {
+          userId: actor.userId,
+          userName: actorUser?.fullName,
+          role: actor.role,
+          department: actorUser?.department?.name,
+          action: AuditAction.AWS_MANAGER_EDIT,
+          entityType: AuditEntityType.AWS,
+          entityId: row.batchDocumentId,
+          docNo: row.batchDocument.docNo,
+          fieldChanged: change.field,
+          oldValue: change.oldValue ?? undefined,
+          newValue: change.newValue ?? undefined,
+          comment: `C-4 manager edit on section ${row.specDocumentTest.testName}: ${body.reason}`,
+          ipAddress,
+        },
+        tx,
+      );
+    }
 
     return row;
   });

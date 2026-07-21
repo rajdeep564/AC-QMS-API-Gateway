@@ -4,6 +4,7 @@ import { requireAuth } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
 import { validate } from "../../middleware/validate";
 import { rejectBodySchema, transitionBodySchema } from "../masters/masters.schema";
+import { listSpecDocumentsHandler, retrySpecRenderHandler } from "../documents/documents.controller";
 import { patchSpecBodySchema, reviseSpecBodySchema } from "./specs.schema";
 import {
   approve,
@@ -31,6 +32,7 @@ router.get(
   requireRole(Role.QA_MGR, Role.SADMIN),
   listSignatureQueue,
 );
+router.get("/:id/documents", requireAuth, listSpecDocumentsHandler);
 router.get("/:id", requireAuth, getById);
 router.patch("/:id", requireAuth, requireRole(Role.QC_EXEC), validate(patchSpecBodySchema), patch);
 router.post("/:id/submit", requireAuth, requireRole(Role.QC_EXEC), submit);
@@ -44,5 +46,11 @@ router.post(
   reject,
 );
 router.post("/:id/revise", requireAuth, requireRole(Role.QC_EXEC), validate(reviseSpecBodySchema), revise);
+router.post(
+  "/:id/render/retry",
+  requireAuth,
+  requireRole(Role.QC_MGR, Role.QA_MGR, Role.SADMIN),
+  retrySpecRenderHandler,
+);
 
 export default router;

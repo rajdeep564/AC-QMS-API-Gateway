@@ -4,7 +4,6 @@ import {
   DocStatus,
   DocType,
   Role,
-  SpecVariant,
   StandingDocStatus,
 } from "@prisma/client";
 import { prisma, type Tx } from "../lib/prisma-types";
@@ -20,7 +19,7 @@ import { AuditAction, AuditEntityType, log as auditLog } from "./audit.service";
 import { generateCoaFromSignedAws } from "./coa-generator";
 import { notify } from "./notification.service";
 import { awsDocumentLink, batchLink, standingSpecLink } from "./notification-links";
-import { renderDocuments } from "./render-documents.service";
+import { scheduleDocumentRender } from "./render-documents.service";
 import {
   findTransitionRule,
   WorkflowAction,
@@ -360,11 +359,44 @@ function enforceStandingGuards(
   }
 }
 
-function enforceAwsDocumentGuards(
+async function collectAwsDataEntererIds(
+  awsDocId: string,
+  client: typeof prisma | Tx = prisma,
+): Promise<Set<string>> {
+  const sections = await client.awsSection.findMany({
+    where: { batchDocumentId: awsDocId },
+    select: { analystId: true, checkerId: true },
+  });
+  const ids = new Set<string>();
+  for (const s of sections) {
+    if (s.analystId) ids.add(s.analystId);
+    if (s.checkerId) ids.add(s.checkerId);
+  }
+
+  // Analyst/checker data entry often precedes analyst_id assignment; include UPDATE actors.
+  const entryAudits = await client.auditLog.findMany({
+    where: {
+      entityType: AuditEntityType.AWS,
+      entityId: awsDocId,
+      action: { in: [AuditAction.AWS_MANAGER_EDIT, AuditAction.UPDATE] },
+      userId: { not: null },
+    },
+    select: { userId: true },
+    distinct: ["userId"],
+  });
+  for (const row of entryAudits) {
+    if (row.userId) ids.add(row.userId);
+  }
+
+  return ids;
+}
+
+async function enforceAwsDocumentGuards(
   action: WorkflowAction,
   entity: AwsDocumentRecord,
   actorUserId: string,
-): void {
+  client: typeof prisma | Tx = prisma,
+): Promise<void> {
   if (action === "SUBMIT") {
     if (entity.assignedQcExecId !== actorUserId) {
       throw AppError.notAssignee();
@@ -378,6 +410,13 @@ function enforceAwsDocumentGuards(
   if (action === "SIGN") {
     if (actorUserId === entity.qcApprovedById || actorUserId === entity.submittedById) {
       throw AppError.selfApproval("Signer cannot be the QC approver or submitter");
+    }
+    // C-4: QA signer must not be anyone who entered or edited this AWS's data
+    const enterers = await collectAwsDataEntererIds(entity.id, client);
+    if (enterers.has(actorUserId)) {
+      throw AppError.forbidden(
+        "QA signer cannot be a user who entered or edited this AWS document's data",
+      );
     }
   }
 }
@@ -395,39 +434,16 @@ function enforceBatchGuards(
 }
 
 async function onStandingSpecSigned(
-  tx: Tx,
+  _tx: Tx,
   entity: StandingEntityRecord,
   actor: JwtAccessPayload,
 ): Promise<void> {
-  if (entity.supersedesId) {
-    await specsRepo.supersedeSpecPair(entity.supersedesId, tx, {
-      userId: actor.userId,
-      action: AuditAction.SUPERSEDE,
-      entityType: AuditEntityType.SPEC,
-      entityId: entity.supersedesId,
-      oldStatus: StandingDocStatus.QA_SIGNED,
-    });
-  }
-
-  const otherSigned = await specsRepo.countQaSignedSpecs(
-    entity.productId,
-    entity.variant as SpecVariant,
-    entity.id,
-    tx,
-  );
-  if (otherSigned > 0) {
-    throw AppError.conflict("Only one QA_SIGNED SPEC may exist per product and variant");
-  }
-
-  await renderDocuments(
-    "STANDING_SPEC",
-    entity.id,
-    {
-      userId: actor.userId,
-      docNo: entity.specNo,
-    },
-    tx,
-  );
+  // C-1: supersede of a prior revision is optional — signing a new revision
+  // does NOT auto-SUPERSEDE other QA_SIGNED SPECs. supersedesId remains
+  // lineage only; explicit supersede is a separate action when needed.
+  // Epic 21: render is scheduled post-commit (see transitionStandingSpec).
+  void entity;
+  void actor;
 }
 
 async function dispatchStandingNotifications(
@@ -720,6 +736,18 @@ async function transitionStandingSpec(input: TransitionInput) {
     ? await runTransition(input.tx)
     : await prisma.$transaction(runTransition);
 
+  if (
+    !input.tx &&
+    input.action === "SIGN" &&
+    rule.toStatus === "QA_SIGNED"
+  ) {
+    await scheduleDocumentRender({
+      kind: "STANDING_SPEC",
+      specId: input.entityId,
+      actorId: input.actor.userId,
+    });
+  }
+
   return updated;
 }
 
@@ -803,7 +831,7 @@ async function transitionAwsDocument(input: TransitionInput) {
     throw AppError.forbidden(`Role ${rule.requiredRole} is required for this action`);
   }
 
-  enforceAwsDocumentGuards(input.action, entity, input.actor.userId);
+  await enforceAwsDocumentGuards(input.action, entity, input.actor.userId, input.tx ?? prisma);
 
   if (input.action === "SUBMIT") {
     const summary = await batchesRepo.countAwsSectionCompletion(
@@ -846,15 +874,6 @@ async function transitionAwsDocument(input: TransitionInput) {
     }
 
     if (input.action === "SIGN" && rule.toStatus === "QA_SIGNED") {
-      await renderDocuments(
-        "AWS",
-        input.entityId,
-        {
-          userId: input.actor.userId,
-          docNo: entity.docNo,
-        },
-        tx,
-      );
       await generateCoaFromSignedAws(tx, entity.batchId, input.entityId, entity.docNo);
     }
 
@@ -891,6 +910,18 @@ async function transitionAwsDocument(input: TransitionInput) {
   const updated = input.tx
     ? await runTransition(input.tx)
     : await prisma.$transaction(runTransition);
+
+  if (
+    !input.tx &&
+    input.action === "SIGN" &&
+    rule.toStatus === "QA_SIGNED"
+  ) {
+    await scheduleDocumentRender({
+      kind: "AWS",
+      batchDocumentId: input.entityId,
+      actorId: input.actor.userId,
+    });
+  }
 
   return updated;
 }

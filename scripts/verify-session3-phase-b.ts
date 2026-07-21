@@ -31,6 +31,7 @@ import {
   createBatch,
   submitBatch,
 } from "../src/modules/batches/batches.service";
+import * as batchesRepo from "../src/modules/batches/batches.repository";
 import { CreateSpecBody } from "../src/modules/specs/specs.schema";
 import {
   approveSpec,
@@ -39,15 +40,21 @@ import {
   submitSpec,
 } from "../src/modules/specs/specs.service";
 import { transition } from "../src/services/workflow-engine";
+import { drainDocumentRenderQueues } from "../src/services/render-documents.service";
 import { JwtAccessPayload } from "../src/types/auth.types";
 
+import {
+  SAMPLE_SPEC_BODY,
+  EXPECTED_TEST_COUNT,
+  patchSectionInSpec,
+  completeSectionTwoPerson,
+} from "./lib/aws-section-fixture";
 import {
   DEV_PASSWORD,
   ensureQaSignedHarnessSpec,
   ensureVerifierActiveMaster,
   ensureVerifierProduct,
 } from "./lib/verifier-harness";
-import { SAMPLE_SPEC_BODY } from "./fixtures/spec-sample-body";
 
 type CheckResult = { name: string; pass: boolean; detail: string };
 
@@ -76,6 +83,7 @@ async function getUser(username: string) {
 }
 
 async function deleteSpecFixture(productId: string) {
+  await drainDocumentRenderQueues(60_000);
   await prisma.moaDocSection.deleteMany({ where: { moaDoc: { spec: { productId } } } });
   await prisma.moaDoc.deleteMany({ where: { spec: { productId } } });
   await prisma.specTest.deleteMany({ where: { spec: { productId } } });
@@ -83,6 +91,7 @@ async function deleteSpecFixture(productId: string) {
 }
 
 async function deleteBatchFixture(batchId: string) {
+  await drainDocumentRenderQueues(60_000);
   await prisma.awsSection.deleteMany({ where: { batchDocument: { batchId } } });
   await prisma.coaResult.deleteMany({ where: { batchDocument: { batchId } } });
   await prisma.batchDocument.deleteMany({ where: { batchId } });
@@ -110,7 +119,35 @@ async function ensureQaSignedSpec(
   return signed;
 }
 
-async function createActivatedAwsFixture(): Promise<{
+const ROLLBACK_AWS_SPEC_BODY: CreateSpecBody = {
+  variant: "GENERAL",
+  tests: [
+    {
+      sortOrder: 1,
+      testName: "Description",
+      resultType: "QUALITATIVE",
+      acceptanceCriteria: "White crystalline powder",
+      isOptional: false,
+    },
+    {
+      sortOrder: 2,
+      testName: "Assay",
+      resultType: "QUANTITATIVE",
+      operator: "BETWEEN",
+      minValue: 98.5,
+      maxValue: 101.5,
+      uom: "%",
+    },
+  ],
+  moaSections: [
+    { specTestRef: 0, pharmacopoeia: "IP", procedureText: "Visual examination per pharmacopoeia." },
+    { specTestRef: 1, pharmacopoeia: "IP", procedureText: "Titrimetric assay per IP monograph." },
+  ],
+};
+
+async function createActivatedAwsFixture(
+  specBody: CreateSpecBody = SAMPLE_SPEC_BODY,
+): Promise<{
   batchId: string;
   productId: string;
   awsDocId: string;
@@ -133,7 +170,7 @@ async function createActivatedAwsFixture(): Promise<{
     kavya.id,
     priya.id,
     sanjay.id,
-    SAMPLE_SPEC_BODY,
+    specBody,
   );
   const created = await createBatch(
     verifierProduct.id,
@@ -182,27 +219,22 @@ function txWithForcedAuditFailure<T extends object>(tx: T): T {
   return new Proxy(tx, {
     get(target, prop, receiver) {
       if (prop === "auditLog") {
-        const auditLog = Reflect.get(target, prop, receiver);
-        return {
-          ...auditLog,
-          create: async () => {
-            throw new Error("FORCED_AWS_AUDIT_FAILURE");
+        const delegate = Reflect.get(target, prop, receiver) as { create: (...args: unknown[]) => unknown };
+        return new Proxy(delegate, {
+          get(dTarget, dProp, dReceiver) {
+            if (dProp === "create") {
+              return async () => {
+                throw new Error("FORCED_AWS_AUDIT_FAILURE");
+              };
+            }
+            const val = Reflect.get(dTarget, dProp, dReceiver);
+            return typeof val === "function" ? val.bind(dTarget) : val;
           },
-        };
+        });
       }
-      const value = Reflect.get(target, prop, receiver);
-      return typeof value === "function" ? value.bind(target) : value;
+      return Reflect.get(target, prop, receiver);
     },
   }) as T;
-}
-
-async function completeSectionTwoPerson(
-  sectionId: string,
-  analystId: string,
-  checkerId: string,
-): Promise<void> {
-  await completeAwsSection(sectionId, actor(analystId, Role.QC_EXEC));
-  await checkAwsSection(sectionId, { password: DEV_PASSWORD }, actor(checkerId, Role.QC_EXEC));
 }
 
 async function testBackendRecompute(): Promise<void> {
@@ -260,21 +292,21 @@ async function testTwoPersonRule(): Promise<void> {
     const fixture = await createActivatedAwsFixture();
     batchId = fixture.batchId;
     productId = fixture.productId;
-    const appearance = fixture.sections.find((s) => s.testName === "Appearance");
-    if (!appearance) throw new Error("Appearance section missing");
+    const description = fixture.sections.find((s) => s.testName === "Description");
+    if (!description) throw new Error("Description section missing");
 
     await patchAwsSection(
-      appearance.id,
+      description.id,
       { readings: { passFail: "PASS" } },
       { readings: { passFail: "PASS" } },
       actor(fixture.kavyaId, Role.QC_EXEC),
     );
-    await completeAwsSection(appearance.id, actor(fixture.kavyaId, Role.QC_EXEC));
+    await completeAwsSection(description.id, actor(fixture.kavyaId, Role.QC_EXEC));
 
     let blocked = false;
     try {
       await checkAwsSection(
-        appearance.id,
+        description.id,
         { password: DEV_PASSWORD },
         actor(fixture.kavyaId, Role.QC_EXEC),
       );
@@ -295,30 +327,30 @@ async function testAwsTransitionAuditRollback(): Promise<void> {
   let productId: string | null = null;
 
   try {
-    const fixture = await createActivatedAwsFixture();
+    const fixture = await createActivatedAwsFixture(ROLLBACK_AWS_SPEC_BODY);
     batchId = fixture.batchId;
     productId = fixture.productId;
 
     for (const section of fixture.sections) {
-      if (section.testName === "Appearance") {
-        await patchAwsSection(
-          section.id,
-          { readings: { passFail: "PASS" } },
-          { readings: { passFail: "PASS" } },
-          actor(fixture.kavyaId, Role.QC_EXEC),
-        );
-      } else {
-        await patchAwsSection(
-          section.id,
-          { readings: { variables: { result: 99.5 } } },
-          { readings: { variables: { result: 99.5 } } },
-          actor(fixture.kavyaId, Role.QC_EXEC),
-        );
-      }
+      await patchSectionInSpec(section, fixture.kavyaId);
       await completeSectionTwoPerson(section.id, fixture.kavyaId, fixture.meeraId);
     }
 
+    const completion = await batchesRepo.countAwsSectionCompletion(fixture.awsDocId);
+    if (!completion.allComplete) {
+      const rows = await prisma.awsSection.findMany({
+        where: { batchDocumentId: fixture.awsDocId },
+        include: { specDocumentTest: { select: { testName: true } } },
+      });
+      throw new Error(
+        `Sections incomplete before SUBMIT: ${completion.incomplete}/${completion.total} (${rows
+          .map((r) => `${r.specDocumentTest.testName}:${r.status}`)
+          .join(", ")})`,
+      );
+    }
+
     let rolledBack = false;
+    let submitError: unknown;
     try {
       await prisma.$transaction(async (tx) => {
         await transition({
@@ -326,15 +358,37 @@ async function testAwsTransitionAuditRollback(): Promise<void> {
           entityId: fixture.awsDocId,
           action: "SUBMIT",
           actor: actor(fixture.kavyaId, Role.QC_EXEC),
+          password: DEV_PASSWORD,
           tx: txWithForcedAuditFailure(tx),
         });
       });
     } catch (error) {
+      submitError = error;
+      if (error instanceof AppError && error.details !== undefined) {
+        submitError = `${error.message}: ${JSON.stringify(error.details)}`;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      const causeMessage =
+        error instanceof Error && error.cause instanceof Error ? error.cause.message : "";
       rolledBack =
-        error instanceof Error && error.message === "FORCED_AWS_AUDIT_FAILURE";
+        message.includes("FORCED_AWS_AUDIT_FAILURE") ||
+        causeMessage.includes("FORCED_AWS_AUDIT_FAILURE");
     }
 
-    assert(rolledBack, "Expected forced in-tx audit failure during AWS SUBMIT");
+    if (!rolledBack) {
+      const awsAfter = await prisma.batchDocument.findUnique({
+        where: { id: fixture.awsDocId },
+      });
+      const detail =
+        submitError instanceof Error
+          ? submitError.message
+          : submitError !== undefined
+            ? String(submitError)
+            : "no error (SUBMIT committed)";
+      throw new Error(
+        `Expected forced in-tx audit failure during AWS SUBMIT (${detail}; awsStatus=${awsAfter?.status ?? "missing"})`,
+      );
+    }
 
     const awsAfter = await prisma.batchDocument.findUniqueOrThrow({
       where: { id: fixture.awsDocId },
@@ -351,6 +405,8 @@ async function testAwsTransitionAuditRollback(): Promise<void> {
 async function main() {
   console.log("Session 3B Phase B verification\n");
 
+  await drainDocumentRenderQueues(60_000);
+
   const results: CheckResult[] = [];
 
   results.push(
@@ -362,9 +418,15 @@ async function main() {
         batchId = fixture.batchId;
         productId = fixture.productId;
 
-        assert(fixture.sections.length === 2, "Expected 2 aws_sections from snapshot");
+        assert(
+          fixture.sections.length === EXPECTED_TEST_COUNT,
+          `Expected ${EXPECTED_TEST_COUNT} aws_sections from snapshot`,
+        );
         assert(fixture.sections[0]!.sortOrder === 1, "First section sort order must be 1");
-        assert(fixture.sections[1]!.sortOrder === 2, "Second section sort order must be 2");
+        assert(
+          fixture.sections[EXPECTED_TEST_COUNT - 1]!.sortOrder === EXPECTED_TEST_COUNT,
+          "Last section sort order must match test count",
+        );
 
         const rows = await prisma.awsSection.findMany({
           where: { batchDocumentId: fixture.awsDocId },
@@ -616,8 +678,19 @@ async function main() {
         "AWS transition audit must not run after tx commits",
       );
       assert(
-        /renderDocuments\([\s\S]*?\btx\b/.test(transitionAwsSrc),
-        "renderDocuments(AWS) must receive live tx",
+        !/renderDocuments\(/.test(transitionAwsSrc),
+        "transitionAwsDocument must not call renderDocuments in-tx",
+      );
+      assert(
+        /scheduleDocumentRender\(\{[\s\S]*?kind:\s*"AWS"/.test(transitionAwsSrc),
+        "QA sign must schedule AWS render post-commit",
+      );
+      const runTransitionBlock =
+        transitionAwsSrc.match(/const runTransition = async \(tx: Tx\) => \{[\s\S]*?\n  \};/)?.[0] ??
+        "";
+      assert(
+        !runTransitionBlock.includes("scheduleDocumentRender"),
+        "AWS render schedule must not run inside runTransition tx",
       );
 
       console.log("  PASS — all AWS audit calls tx-threaded; mutations wrapped in $transaction");

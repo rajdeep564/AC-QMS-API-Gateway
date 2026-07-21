@@ -35,6 +35,16 @@ export const patchAwsSectionBodySchema = z
   })
   .strict();
 
+/** C-4: QC Manager edit — reason required (422 if missing via Zod). */
+export const patchAwsSectionByManagerBodySchema = z
+  .object({
+    readings: readingsSchema.optional(),
+    instrumentId: z.string().uuid().optional().nullable(),
+    reagentId: z.string().uuid().optional().nullable(),
+    reason: z.string().min(1, "Change reason is required"),
+  })
+  .strict();
+
 export const previewAwsSectionBodySchema = z
   .object({
     readings: readingsSchema,
@@ -87,6 +97,7 @@ export const uploadAttachmentBodySchema = z
   .strict();
 
 export type PatchAwsSectionBody = z.infer<typeof patchAwsSectionBodySchema>;
+export type PatchAwsSectionByManagerBody = z.infer<typeof patchAwsSectionByManagerBodySchema>;
 export type PreviewAwsSectionBody = z.infer<typeof previewAwsSectionBodySchema>;
 export type AcknowledgeExpiredBody = z.infer<typeof acknowledgeExpiredBodySchema>;
 export type AcknowledgeOosBody = z.infer<typeof acknowledgeOosBodySchema>;

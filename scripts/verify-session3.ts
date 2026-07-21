@@ -38,15 +38,29 @@ import {
   signAndIssueCoa,
   transitionDocument,
 } from "../src/modules/documents/documents.service";
-import { findBatchReadySpec } from "../src/modules/specs/specs.service";
+import {
+  approveSpec,
+  findBatchReadySpec,
+  listActiveSpecsForProduct,
+  reviseSpec,
+  signSpec,
+  submitSpec,
+} from "../src/modules/specs/specs.service";
 import {
   DEV_PASSWORD,
   EXPECTED_TEST_COUNT,
   cleanupVerifierHarnessData,
   ensureQaSignedHarnessSpec,
+  ensureVerifierActiveMaster,
   ensureVerifierProduct,
 } from "./lib/verifier-harness";
 import { assertBatchLocked } from "../src/modules/batches/batches-guards";
+import { patchAwsSectionByManager } from "../src/modules/aws/aws.service";
+import { documentStorage } from "../src/services/document-storage.service";
+import { getSpecDetail } from "../src/modules/specs/specs.service";
+import { AuditAction, AuditEntityType } from "../src/services/audit.service";
+import bcrypt from "bcrypt";
+import { DeptName } from "@prisma/client";
 
 function actor(userId: string, role: Role, departmentId: string | null = null): JwtAccessPayload {
   return { userId, role, departmentId };
@@ -177,6 +191,7 @@ async function main() {
   const sanjay = await getUser("sanjay.reddy");
 
   const verifierProduct = await ensureVerifierProduct();
+  await ensureVerifierActiveMaster(kavya.id);
 
   const signedSpec = await ensureQaSignedHarnessSpec(
     verifierProduct.id,
@@ -184,7 +199,36 @@ async function main() {
     priya.id,
     sanjay.id,
   );
-  const standingTestCount = await prisma.specTest.count({ where: { specId: signedSpec.id } });
+  const olderSpecId = signedSpec.id;
+  const olderTestNames = (
+    await prisma.specTest.findMany({
+      where: { specId: olderSpecId },
+      orderBy: { sortOrder: "asc" },
+      select: { testName: true },
+    })
+  ).map((t) => t.testName);
+
+  // #2 C-1 — two concurrent active SPECs; batch may select the older one
+  const revision = await reviseSpec(olderSpecId, actor(kavya.id, Role.QC_EXEC));
+  await submitSpec(revision.id, actor(kavya.id, Role.QC_EXEC));
+  await approveSpec(revision.id, DEV_PASSWORD, actor(priya.id, Role.QC_MGR));
+  await signSpec(revision.id, DEV_PASSWORD, actor(sanjay.id, Role.QA_MGR));
+
+  // Distinguish newer SPEC so snapshot-of-older is unambiguous
+  await prisma.specTest.updateMany({
+    where: { specId: revision.id },
+    data: { testName: "NEWER-SPEC-MUTATED" },
+  });
+
+  const activeSpecs = await listActiveSpecsForProduct(verifierProduct.id);
+  if (activeSpecs.length !== 2) {
+    failures.push(`#2 C-1: expected 2 active SPECs, got ${activeSpecs.length}`);
+  }
+  if (activeSpecs[0]?.id !== revision.id || activeSpecs[1]?.id !== olderSpecId) {
+    failures.push("#2 C-1: active-specs should return newest first (R-02 then R-01)");
+  }
+
+  const standingTestCount = await prisma.specTest.count({ where: { specId: olderSpecId } });
   if (standingTestCount !== EXPECTED_TEST_COUNT) {
     failures.push(
       `Standing SPEC should have ${EXPECTED_TEST_COUNT} tests, found ${standingTestCount}`,
@@ -192,17 +236,30 @@ async function main() {
   }
   const batchNo = `VFY-S3-${Date.now()}`;
 
-  // 2 — Create batch with snapshot
+  // 2 — Create batch selecting OLDER SPEC (not latest)
   const created = await createBatch(
     verifierProduct.id,
     {
-      sourceSpecId: signedSpec.id,
+      sourceSpecId: olderSpecId,
       batchNo,
       assignedQcExecId: kavya.id,
       batchSize: "100 kg",
     },
     actor(priya.id, Role.QC_MGR),
   );
+
+  if (created.batch.sourceSpecId !== olderSpecId) {
+    failures.push("#2 C-1: batch sourceSpecId should be the selected older SPEC");
+  }
+  const snapshotNames = created.batch.specDocTests.map((t) => t.testName).sort();
+  if (JSON.stringify(snapshotNames) !== JSON.stringify([...olderTestNames].sort())) {
+    failures.push(
+      `#2 C-1: batch snapshot should match older SPEC tests, not latest (got ${snapshotNames.join(",")})`,
+    );
+  }
+  if (snapshotNames.some((n) => n === "NEWER-SPEC-MUTATED")) {
+    failures.push("#2 C-1: batch incorrectly snapshotted the newer SPEC");
+  }
 
   if (!created.batch.arnNo) failures.push("Batch missing ARN");
   if (created.batch.specDocTests.length !== standingTestCount) {
@@ -225,38 +282,73 @@ async function main() {
   const snapshotTestNames = created.batch.specDocTests.map((t) => t.testName).sort();
   const frozenBefore = [...snapshotTestNames];
 
-  // 3 — No QA_SIGNED spec → 409
+  // 3 — Non-signed / wrong product SPEC → 409
   const orphan = await prisma.product.create({ data: { name: `Orphan-S3-${Date.now()}` } });
   const noSpec = await expectThrows(
     () =>
       createBatch(
         orphan.id,
         {
-          sourceSpecId: signedSpec.id,
+          sourceSpecId: olderSpecId,
           batchNo: `ORPH-${Date.now()}`,
           assignedQcExecId: kavya.id,
         },
         actor(priya.id, Role.QC_MGR),
       ),
-    "Batch without QA_SIGNED spec",
+    "Batch with SPEC not belonging to product",
   );
   if (noSpec) failures.push(noSpec);
+
+  const draftSpec = await prisma.spec.create({
+    data: {
+      productId: verifierProduct.id,
+      variant: "GENERAL",
+      specNo: "SPEC/VFY/DRAFT",
+      revisionNo: 99,
+      status: StandingDocStatus.DRAFT,
+      createdById: kavya.id,
+    },
+  });
+  const unsignedSpec = await expectThrows(
+    () =>
+      createBatch(
+        verifierProduct.id,
+        {
+          sourceSpecId: draftSpec.id,
+          batchNo: `UNSIGNED-${Date.now()}`,
+          assignedQcExecId: kavya.id,
+        },
+        actor(priya.id, Role.QC_MGR),
+      ),
+    "Batch with non-signed SPEC",
+  );
+  if (unsignedSpec) failures.push(unsignedSpec);
+  await prisma.spec.delete({ where: { id: draftSpec.id } });
   await prisma.product.delete({ where: { id: orphan.id } });
 
-  // 4 — Snapshot immutability after standing SPEC revise
+  // 4 — Snapshot immutability after standing SPEC revise/mutate
   await prisma.specTest.updateMany({
-    where: { specId: signedSpec.id },
+    where: { specId: olderSpecId },
     data: { testName: "MUTATED-TEST-NAME" },
   });
   const batchAfterMutate = await getBatchById(created.batch.id, actor(priya.id, Role.QC_MGR));
   const frozenAfter = batchAfterMutate.specDocTests.map((t) => t.testName).sort();
   if (JSON.stringify(frozenBefore) !== JSON.stringify(frozenAfter)) {
-    failures.push("#4 snapshot immutability: batch spec_document_tests changed after standing SPEC mutation");
+    failures.push("#3/#4 snapshot immutability: batch spec_document_tests changed after standing SPEC mutation");
   }
-  await prisma.specTest.updateMany({
-    where: { specId: signedSpec.id, testName: "MUTATED-TEST-NAME" },
-    data: { testName: frozenBefore[0] ?? "Description" },
-  });
+  // restore standing tests for any later assertions that match by name
+  for (let i = 0; i < olderTestNames.length; i++) {
+    const tests = await prisma.specTest.findMany({
+      where: { specId: olderSpecId },
+      orderBy: { sortOrder: "asc" },
+    });
+    if (tests[i] && olderTestNames[i]) {
+      await prisma.specTest.update({
+        where: { id: tests[i]!.id },
+        data: { testName: olderTestNames[i]! },
+      });
+    }
+  }
 
   // 5 — Batch lock + AWS open
   await submitBatch(created.batch.id, actor(priya.id, Role.QC_MGR));
@@ -364,10 +456,89 @@ async function main() {
     failures.push(`All ${standingTestCount} AWS sections should be COMPLETE, got ${allComplete}`);
   }
 
-  // 7 — AWS sign → COA auto-gen → sign-and-issue → RELEASED
-  await transitionDocument(awsDoc!.id, "SUBMIT", actor(kavya.id, Role.QC_EXEC));
+  // 7 — AWS submit + QC approve; then C-4 manager edit + sign guard
+  await transitionDocument(awsDoc!.id, "SUBMIT", actor(kavya.id, Role.QC_EXEC), DEV_PASSWORD);
   await transitionDocument(awsDoc!.id, "APPROVE", actor(priya.id, Role.QC_MGR), DEV_PASSWORD);
-  await transitionDocument(awsDoc!.id, "SIGN", actor(sanjay.id, Role.QA_MGR), DEV_PASSWORD);
+
+  // #6 C-4 — missing reason → validation failure
+  const missingReason = await expectThrows(
+    () =>
+      patchAwsSectionByManager(
+        awsDoc!.id,
+        description.id,
+        { readings: { passFail: "PASS" }, reason: "" } as never,
+        { readings: { passFail: "PASS" }, reason: "" },
+        actor(priya.id, Role.QC_MGR),
+      ),
+    "C-4 missing reason",
+  );
+  if (missingReason) failures.push(`#6 ${missingReason}`);
+
+  const managerEdit = await patchAwsSectionByManager(
+    awsDoc!.id,
+    description.id,
+    {
+      readings: { passFail: "PASS", remarks: "mgr-edit" },
+      reason: "Corrected remarks before QA sign",
+    },
+    { readings: { passFail: "PASS", remarks: "mgr-edit" }, reason: "Corrected remarks before QA sign" },
+    actor(priya.id, Role.QC_MGR),
+  );
+  if (!managerEdit) failures.push("#6 C-4 manager edit returned empty");
+
+  const changeHistory = await prisma.auditLog.findFirst({
+    where: {
+      entityType: AuditEntityType.AWS,
+      entityId: awsDoc!.id,
+      action: AuditAction.AWS_MANAGER_EDIT,
+      userId: priya.id,
+    },
+  });
+  if (!changeHistory || !changeHistory.comment?.includes("Corrected remarks")) {
+    failures.push("#6 C-4 change-history row missing after manager edit");
+  }
+
+  // #7 C-4 — QA signer who edited (simulated) → 403; different QA_MGR → OK
+  await prisma.auditLog.create({
+    data: {
+      timestamp: new Date(),
+      userId: sanjay.id,
+      userName: sanjay.fullName,
+      role: Role.QA_MGR,
+      action: AuditAction.AWS_MANAGER_EDIT,
+      entityType: AuditEntityType.AWS,
+      entityId: awsDoc!.id,
+      docNo: awsDoc!.docNo,
+      fieldChanged: "readings",
+      oldValue: "old",
+      newValue: "new",
+      comment: "C-4 guard test: simulated QA_MGR edit",
+    },
+  });
+
+  const editorSign = await expectThrows(
+    () => transitionDocument(awsDoc!.id, "SIGN", actor(sanjay.id, Role.QA_MGR), DEV_PASSWORD),
+    "QA signer who edited",
+  );
+  if (editorSign) failures.push(`#7 ${editorSign}`);
+
+  let altQa = await prisma.user.findFirst({ where: { username: "neha.qa", deletedAt: null } });
+  if (!altQa) {
+    const qaDept = await prisma.department.findFirst({ where: { name: DeptName.QA } });
+    altQa = await prisma.user.create({
+      data: {
+        fullName: "Neha QA",
+        username: "neha.qa",
+        email: "neha.qa@acqms.local",
+        passwordHash: await bcrypt.hash(DEV_PASSWORD, 12),
+        role: Role.QA_MGR,
+        departmentId: qaDept!.id,
+        forcePwdChange: false,
+      },
+    });
+  }
+
+  await transitionDocument(awsDoc!.id, "SIGN", actor(altQa.id, Role.QA_MGR), DEV_PASSWORD);
 
   const coaDoc = await prisma.batchDocument.findFirst({
     where: { batchId: created.batch.id, docType: DocType.COA },
@@ -383,10 +554,29 @@ async function main() {
     failures.push(`COA should have ${standingTestCount} result rows`);
   }
 
-  await signAndIssueCoa(coaDoc!.id, actor(sanjay.id, Role.QA_MGR), DEV_PASSWORD);
+  // C-2 attribution on AWS + SPEC + batch
+  const awsDetail = await getDocumentDetail(awsDoc!.id, actor(altQa.id, Role.QA_MGR));
+  if (!awsDetail.signatureLineage?.qaSigned?.user?.id) {
+    failures.push("#9 C-2: AWS signatureLineage.qaSigned missing after sign");
+  }
+  const specDetail = await getSpecDetail(olderSpecId, actor(kavya.id, Role.QC_EXEC));
+  if (!specDetail.signatureLineage?.authored?.user?.displayName) {
+    failures.push("#9 C-2: SPEC signatureLineage.authored missing");
+  }
+  const batchDetail = await getBatchById(created.batch.id, actor(priya.id, Role.QC_MGR));
+  if (!batchDetail.signatureLineage?.authored?.user?.id) {
+    failures.push("#9 C-2: batch signatureLineage.authored missing");
+  }
 
-  const released = await getBatchById(created.batch.id, actor(sanjay.id, Role.QA_MGR));
+  await signAndIssueCoa(coaDoc!.id, actor(altQa.id, Role.QA_MGR), DEV_PASSWORD);
+
+  const released = await getBatchById(created.batch.id, actor(altQa.id, Role.QA_MGR));
   if (released.status !== BatchStatus.RELEASED) failures.push("Batch should be RELEASED");
+
+  const coaDetail = await getDocumentDetail(coaDoc!.id, actor(altQa.id, Role.QA_MGR));
+  if (!coaDetail.signatureLineage) {
+    failures.push("#9 C-2: COA signatureLineage missing");
+  }
 
   const renderAudits = await prisma.auditLog.count({
     where: {
@@ -396,10 +586,30 @@ async function main() {
   });
   if (renderAudits < 1) failures.push("renderDocuments stub audit not found");
 
-  // 10 — ARN concurrency
+  // #10 storage seam
+  const resolved = documentStorage.resolvePath({
+    productCode: "VFY",
+    batchNo: batchNo,
+    docType: "AWS",
+    docNo: awsDoc!.docNo,
+    ext: "docx",
+    generatedBy: "system",
+  });
+  if (!resolved.relativePath.includes("VFY") || !resolved.relativePath.includes(batchNo)) {
+    failures.push(`#10 resolvePath incorrect: ${resolved.relativePath}`);
+  }
+
+  // #10 ARN concurrency + QA-09 format
   await prisma.$transaction(async (tx) => {
-    const [a, b] = await Promise.all([generateArn(tx), generateArn(tx)]);
+    const [a, b] = await Promise.all([
+      generateArn(tx, { productId: verifierProduct.id, productCode: "VFY" }),
+      generateArn(tx, { productId: verifierProduct.id, productCode: "VFY" }),
+    ]);
     if (a.arn === b.arn) failures.push("ARN concurrency: duplicate sequences in same tx");
+    const year = String(new Date().getUTCFullYear());
+    if (!a.arn.startsWith(`${year} VFY `)) {
+      failures.push(`#10 QA-09 ARN format unexpected: ${a.arn}`);
+    }
   });
 
   // 11 — structural checks
@@ -411,6 +621,10 @@ async function main() {
 
   // 8 — S1/S2 regression (run as subprocess after cleanup)
   await cleanupVerifierHarnessData(verifierProduct.id);
+  await prisma.user.updateMany({
+    where: { username: "neha.qa" },
+    data: { deletedAt: new Date(), username: `neha.qa.deleted.${Date.now()}`, email: `neha.qa.deleted.${Date.now()}@acqms.local` },
+  });
 
   const session1Failure = runVerifyScript("verify:session1");
   if (session1Failure) failures.push(session1Failure);

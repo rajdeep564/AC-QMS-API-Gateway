@@ -4,8 +4,8 @@ export type MarketingCoaResultDto = {
   id: string;
   testName: string;
   result: string;
-  acceptanceLimits: string;
-  conclusion: string;
+  acceptanceLimits: string | null;
+  conclusion: string | null;
   sortOrder: number;
 };
 
@@ -23,9 +23,7 @@ export type MarketingDocumentListItemDto = {
   docNo: string;
   docType: DocType;
   productName: string;
-  productCode: string;
   batchNo: string;
-  customerName: string | null;
   status: DocStatus;
   releasedAt: Date | null;
   link: string;
@@ -40,14 +38,10 @@ export type MarketingCoaDetailDto = {
   signatureLineage: MarketingSignatureLineageDto;
   batchId: string;
   batchNo: string;
-  arn: string;
+  arnNo: string | null;
   productName: string;
-  productCode: string;
-  customerName: string | null;
-  customerRef: string | null;
-  mfgDateMonth: number;
-  mfgDateYear: number;
-  expiryDate: Date;
+  mfgDate: Date | null;
+  expDate: Date | null;
   releasedAt: Date | null;
 };
 
@@ -69,15 +63,11 @@ export type MarketingIssuedCoaSummaryDto = {
 export type MarketingBatchDetailDto = {
   id: string;
   batchNo: string;
-  arn: string;
+  arnNo: string | null;
   status: string;
   productName: string;
-  productCode: string;
-  customerName: string | null;
-  customerRef: string | null;
-  mfgDateMonth: number;
-  mfgDateYear: number;
-  expiryDate: Date;
+  mfgDate: Date | null;
+  expDate: Date | null;
   releasedAt: Date | null;
   issuedCoa: MarketingIssuedCoaSummaryDto | null;
   documents: MarketingBatchDocumentSummaryDto[];

@@ -4,12 +4,14 @@ import { requireAuth } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
 import { validate } from "../../middleware/validate";
 import { rejectBodySchema, transitionBodySchema } from "../masters/masters.schema";
+import { listBatchDocumentsHandler } from "../documents/documents.controller";
 import { approve, create, getById, list, reject, submit } from "./batches.controller";
 import { createBatchBodySchema, listBatchesQuerySchema } from "./batches.schema";
 
 const router = Router();
 
 router.get("/", requireAuth, validate(listBatchesQuerySchema, "query"), list);
+router.get("/:id/documents", requireAuth, listBatchDocumentsHandler);
 router.get("/:id", requireAuth, getById);
 router.post("/:id/submit", requireAuth, requireRole(Role.QC_MGR), submit);
 router.post(

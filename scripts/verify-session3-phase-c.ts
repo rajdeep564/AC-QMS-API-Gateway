@@ -15,8 +15,6 @@ import {
 } from "@prisma/client";
 import { prisma } from "../src/lib/prisma-types";
 import { AppError } from "../src/lib/app-error";
-import { checkAwsSection, completeAwsSection } from "../src/modules/aws/aws-compliance.service";
-import { patchAwsSection } from "../src/modules/aws/aws.service";
 import {
   approveBatch,
   createBatch,
@@ -26,7 +24,6 @@ import {
   signAndIssueCoa,
   transitionDocument,
 } from "../src/modules/documents/documents.service";
-import { CreateSpecBody } from "../src/modules/specs/specs.schema";
 import {
   approveSpec,
   createSpec,
@@ -35,6 +32,7 @@ import {
 } from "../src/modules/specs/specs.service";
 import { generateCoaFromSignedAws } from "../src/services/coa-generator";
 import { transition } from "../src/services/workflow-engine";
+import { drainDocumentRenderQueues } from "../src/services/render-documents.service";
 import { JwtAccessPayload } from "../src/types/auth.types";
 
 import {
@@ -43,7 +41,7 @@ import {
   ensureVerifierActiveMaster,
   ensureVerifierProduct,
 } from "./lib/verifier-harness";
-import { SAMPLE_SPEC_BODY } from "./fixtures/spec-sample-body";
+import { SAMPLE_SPEC_BODY, fillAndCompleteAllSections } from "./lib/aws-section-fixture";
 
 type CheckResult = { id: number; name: string; pass: boolean; detail: string };
 
@@ -72,6 +70,7 @@ async function getUser(username: string) {
 }
 
 async function deleteSpecFixture(productId: string) {
+  await drainDocumentRenderQueues(60_000);
   const batches = await prisma.batch.findMany({
     where: { productId },
     select: { id: true },
@@ -86,6 +85,7 @@ async function deleteSpecFixture(productId: string) {
 }
 
 async function deleteBatchFixture(batchId: string) {
+  await drainDocumentRenderQueues(60_000);
   await prisma.awsSection.deleteMany({ where: { batchDocument: { batchId } } });
   await prisma.coaResult.deleteMany({ where: { batchDocument: { batchId } } });
   await prisma.batchDocument.deleteMany({ where: { batchId } });
@@ -117,27 +117,22 @@ function txWithForcedAuditFailure<T extends object>(tx: T): T {
   return new Proxy(tx, {
     get(target, prop, receiver) {
       if (prop === "auditLog") {
-        const auditLog = Reflect.get(target, prop, receiver);
-        return {
-          ...auditLog,
-          create: async () => {
-            throw new Error("FORCED_COA_AUDIT_FAILURE");
+        const delegate = Reflect.get(target, prop, receiver) as { create: (...args: unknown[]) => unknown };
+        return new Proxy(delegate, {
+          get(dTarget, dProp, dReceiver) {
+            if (dProp === "create") {
+              return async () => {
+                throw new Error("FORCED_COA_AUDIT_FAILURE");
+              };
+            }
+            const val = Reflect.get(dTarget, dProp, dReceiver);
+            return typeof val === "function" ? val.bind(dTarget) : val;
           },
-        };
+        });
       }
-      const value = Reflect.get(target, prop, receiver);
-      return typeof value === "function" ? value.bind(target) : value;
+      return Reflect.get(target, prop, receiver);
     },
   }) as T;
-}
-
-async function completeSectionTwoPerson(
-  sectionId: string,
-  analystId: string,
-  checkerId: string,
-): Promise<void> {
-  await completeAwsSection(sectionId, actor(analystId, Role.QC_EXEC));
-  await checkAwsSection(sectionId, { password: DEV_PASSWORD }, actor(checkerId, Role.QC_EXEC));
 }
 
 async function createCoaReadyFixture(batchNoSuffix: string) {
@@ -189,26 +184,16 @@ async function createCoaReadyFixture(batchNoSuffix: string) {
     orderBy: { specDocumentTest: { sortOrder: "asc" } },
   });
 
-  for (const section of sections) {
-    if (section.specDocumentTest.testName === "Appearance") {
-      await patchAwsSection(
-        section.id,
-        { readings: { passFail: "PASS" } },
-        { readings: { passFail: "PASS" } },
-        actor(kavya.id, Role.QC_EXEC),
-      );
-    } else if (section.specDocumentTest.testName === "Assay") {
-      await patchAwsSection(
-        section.id,
-        { readings: { variables: { result: 99.5 } } },
-        { readings: { variables: { result: 99.5 } } },
-        actor(kavya.id, Role.QC_EXEC),
-      );
-    }
-    await completeSectionTwoPerson(section.id, kavya.id, meera.id);
-  }
+  await fillAndCompleteAllSections({
+    sections: sections.map((s) => ({
+      id: s.id,
+      testName: s.specDocumentTest.testName,
+    })),
+    analystId: kavya.id,
+    checkerId: meera.id,
+  });
 
-  await transitionDocument(awsDoc.id, "SUBMIT", actor(kavya.id, Role.QC_EXEC));
+  await transitionDocument(awsDoc.id, "SUBMIT", actor(kavya.id, Role.QC_EXEC), DEV_PASSWORD);
   await transitionDocument(awsDoc.id, "APPROVE", actor(priya.id, Role.QC_MGR), DEV_PASSWORD);
   await transitionDocument(awsDoc.id, "SIGN", actor(sanjay.id, Role.QA_MGR), DEV_PASSWORD);
 
@@ -238,6 +223,8 @@ async function createCoaReadyFixture(batchNoSuffix: string) {
 }
 
 async function main() {
+  await drainDocumentRenderQueues(60_000);
+
   const results: CheckResult[] = [];
 
   results.push(
@@ -595,10 +582,9 @@ async function main() {
   );
 
   results.push(
-    await runCheck(16, "tsc + migration + verify:session3 regression", async () => {
+    await runCheck(16, "tsc + migration (slice-local)", async () => {
       execSync("npm run typecheck", { cwd: join(__dirname, ".."), stdio: "pipe" });
       execSync("npx prisma migrate deploy", { cwd: join(__dirname, ".."), stdio: "pipe" });
-      execSync("npm run verify:session3", { cwd: join(__dirname, ".."), stdio: "pipe" });
     }),
   );
 

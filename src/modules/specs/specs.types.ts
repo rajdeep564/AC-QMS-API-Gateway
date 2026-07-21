@@ -40,6 +40,19 @@ export type MoaDocDto = {
   revisionNo: number;
   status: StandingDocStatus;
   sections: MoaSectionDto[];
+  signatureLineage?: import("../../utils/signature-lineage.mapper").SignatureLineageDto | null;
+};
+
+export type ActiveSpecDto = {
+  id: string;
+  productId: string;
+  variant: SpecVariant;
+  specNo: string;
+  revisionNo: number;
+  status: StandingDocStatus;
+  effectiveDate: Date | null;
+  approvedAt: Date | null;
+  createdAt: Date;
 };
 
 export type SpecListItemDto = {
@@ -100,7 +113,10 @@ export type SpecDetailDto = {
   approvedAt: Date | null;
   effectiveDate: Date | null;
   createdAt: Date;
+  renderStatus: import("@prisma/client").RenderStatus;
+  renderError: string | null;
   tests: SpecTestDto[];
   moa: MoaDocDto | null;
+  signatureLineage: import("../../utils/signature-lineage.mapper").SignatureLineageDto;
   allowedActions: WorkflowAction[];
 };

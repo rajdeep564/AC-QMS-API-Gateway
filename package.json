@@ -17,6 +17,7 @@
     "verify:12c": "tsx scripts/verify-epic12c.ts",
     "verify:15": "tsx scripts/verify-epic15.ts",
     "verify:16": "tsx scripts/verify-epic16.ts",
+    "verify:17": "tsx scripts/verify-epic17.ts",
     "verify:session1": "tsx scripts/verify-session1.ts",
     "verify:session2": "tsx scripts/verify-session2.ts",
     "verify:session3": "tsx scripts/verify-session3.ts",
@@ -25,8 +26,15 @@
     "verify:session3-phase-c": "tsx scripts/verify-session3-phase-c.ts",
     "verify:users": "tsx scripts/verify-users-list.ts",
     "verify:b22": "tsx scripts/verify-b22.ts",
+    "verify:b23": "tsx scripts/verify-b23.ts",
+    "verify:b24": "tsx scripts/verify-b24.ts",
+    "verify:b25": "tsx scripts/verify-b25.ts",
+    "verify:phase3": "tsx scripts/verify-phase3-explorer.ts",
+    "verify:all": "npm run typecheck && npm run verify:session1 && npm run verify:session2 && npm run verify:session3 && npm run verify:users && npm run verify:b22 && npm run verify:b23 && npm run verify:b24 && npm run verify:b25 && npm run verify:phase3",
     "verify:p2c": "tsx scripts/verify-p2c-backend-prep.ts",
-    "verify:audit-tx-s3": "tsx scripts/verify-audit-tx-s3.ts"
+    "verify:audit-tx-s3": "tsx scripts/verify-audit-tx-s3.ts",
+    "verify:epic21": "tsx scripts/verify-epic21.ts",
+    "verify:sop-client": "tsx scripts/verify-sop-client-gate.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

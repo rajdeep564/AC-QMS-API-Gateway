@@ -11,6 +11,7 @@ import {
   signSpec,
   submitSpec,
 } from "../../src/modules/specs/specs.service";
+import { drainDocumentRenderQueues } from "../../src/services/render-documents.service";
 import {
   EXPECTED_TEST_COUNT,
   SAMPLE_SPEC_BODY,
@@ -35,7 +36,26 @@ export async function ensureVerifierActiveMaster(adminUserId: string) {
   const existing = await prisma.productMaster.findFirst({
     where: { productId: product.id, status: MasterStatus.ACTIVE },
   });
-  if (existing) return existing;
+  if (existing) {
+    // Ensure shelf-life + product_code for batch create
+    const fields = await prisma.productMasterField.findMany({
+      where: { productMasterId: existing.id },
+    });
+    if (!fields.some((f) => f.fieldKey === "expiry_month")) {
+      await prisma.productMasterField.create({
+        data: {
+          productMasterId: existing.id,
+          fieldKey: "expiry_month",
+          label: "Expiry (months)",
+          value: "36",
+          dataType: "NUMBER",
+          sortOrder: 2,
+          isRequired: true,
+        },
+      });
+    }
+    return existing;
+  }
 
   const now = new Date();
   return prisma.productMaster.create({
@@ -57,13 +77,29 @@ export async function ensureVerifierActiveMaster(adminUserId: string) {
             sortOrder: 1,
             isRequired: true,
           },
+          {
+            fieldKey: "expiry_month",
+            label: "Expiry (months)",
+            value: "36",
+            dataType: "NUMBER",
+            sortOrder: 2,
+            isRequired: true,
+          },
         ],
       },
     },
   });
 }
 
+/**
+ * Await in-flight post-commit renders before deleting fixtures (prevents target-gone races).
+ */
+export async function drainBeforeCleanup(timeoutMs = 60_000): Promise<void> {
+  await drainDocumentRenderQueues(timeoutMs);
+}
+
 export async function cleanupVerifierHarnessData(productId: string) {
+  await drainBeforeCleanup();
   const batches = await prisma.batch.findMany({ where: { productId }, select: { id: true } });
   for (const batch of batches) {
     await prisma.awsSection.deleteMany({

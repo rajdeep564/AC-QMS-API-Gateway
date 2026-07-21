@@ -6,7 +6,7 @@ import { validate } from "../../middleware/validate";
 import { listBatchReady } from "../batches/batches.controller";
 import { create as createMaster } from "../masters/masters.controller";
 import { createMasterBodySchema } from "../masters/masters.schema";
-import { create as createSpec, listForProduct as listSpecs } from "../specs/specs.controller";
+import { create as createSpec, listActiveSpecs, listForProduct as listSpecs } from "../specs/specs.controller";
 import { createSpecBodySchema, listSpecsQuerySchema } from "../specs/specs.schema";
 import { create as createBatch, createBatchBodySchema } from "../batches/batches.routes";
 import { create, getById, list, listMasters } from "./products.controller";
@@ -22,6 +22,12 @@ router.get(
   listBatchReady,
 );
 router.post("/", requireAuth, requireRole(Role.SADMIN), validate(createProductBodySchema), create);
+router.get(
+  "/:id/active-specs",
+  requireAuth,
+  requireRole(Role.QC_MGR, Role.SADMIN),
+  listActiveSpecs,
+);
 router.get("/:id", requireAuth, getById);
 router.get("/:id/masters", requireAuth, listMasters);
 router.post(

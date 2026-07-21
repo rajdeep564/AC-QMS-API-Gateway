@@ -15,6 +15,7 @@ import {
   getAwsSectionDetail,
   listAwsSections,
   patchAwsSection,
+  patchAwsSectionByManager,
   previewAwsSection,
 } from "./aws.service";
 import {
@@ -32,6 +33,7 @@ import type {
   AcknowledgeExpiredBody,
   AcknowledgeOosBody,
   PatchAwsSectionBody,
+  PatchAwsSectionByManagerBody,
   PreviewAwsSectionBody,
   RejectCheckBody,
   UploadAttachmentBody,
@@ -53,6 +55,20 @@ export const patchSection = asyncHandler(async (req: AuthenticatedRequest, res: 
   const body = req.body as PatchAwsSectionBody;
   const { id } = req.params;
   const updated = await patchAwsSection(id, body, req.body as Record<string, unknown>, req.user, req.ip);
+  res.json(ok(updated));
+});
+
+export const patchSectionByManager = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const body = req.body as PatchAwsSectionByManagerBody;
+  const { awsDocId, sectionId } = req.params;
+  const updated = await patchAwsSectionByManager(
+    awsDocId,
+    sectionId,
+    body,
+    req.body as Record<string, unknown>,
+    req.user,
+    req.ip,
+  );
   res.json(ok(updated));
 });
 

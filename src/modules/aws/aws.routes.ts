@@ -14,6 +14,7 @@ import {
   listAttachments,
   listSections,
   patchSection,
+  patchSectionByManager,
   previewSection,
   rejectCheckSection,
   uploadAttachment,
@@ -22,6 +23,7 @@ import {
   acknowledgeExpiredBodySchema,
   acknowledgeOosBodySchema,
   patchAwsSectionBodySchema,
+  patchAwsSectionByManagerBodySchema,
   previewAwsSectionBodySchema,
   rejectCheckBodySchema,
   uploadAttachmentBodySchema,
@@ -31,6 +33,14 @@ const awsDocRouter = Router();
 const awsSectionRouter = Router();
 
 awsDocRouter.get("/:awsDocId/sections", requireAuth, listSections);
+/** C-4: QC Manager edit pre-QA-sign — PATCH /aws/documents/:awsDocId/sections/:sectionId */
+awsDocRouter.patch(
+  "/:awsDocId/sections/:sectionId",
+  requireAuth,
+  requireRole(Role.QC_MGR),
+  validate(patchAwsSectionByManagerBodySchema),
+  patchSectionByManager,
+);
 
 awsSectionRouter.get("/:id", requireAuth, getSectionById);
 awsSectionRouter.patch(
