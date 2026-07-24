@@ -1,0 +1,46 @@
+name: CI/CD Pipeline - API Gateway
+
+on:
+  push:
+    branches:
+      - staging
+  pull_request:
+    branches:
+      - staging
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma Client
+        run: npx prisma generate
+
+      - name: Run Typecheck
+        run: npm run typecheck
+
+  deploy:
+    needs: build-and-test
+    if: github.ref == 'refs/heads/staging' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Trigger Render Deploy Hook
+        run: |
+          if [ -n "${{ secrets.RENDER_API_GATEWAY_DEPLOY_HOOK }}" ]; then
+            curl -X POST "${{ secrets.RENDER_API_GATEWAY_DEPLOY_HOOK }}"
+          else
+            echo "RENDER_API_GATEWAY_DEPLOY_HOOK secret is not set. Skipping deploy hook call."
+          fi
