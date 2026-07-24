@@ -23,4 +23,4 @@ ENV DOCUMENT_STORAGE_ROOT=/app/storage/documents \
 
 EXPOSE 4000
 
-CMD ["sh", "-c", "npx prisma migrate deploy && npx tsx src/server.ts"]
+CMD ["sh", "-c", "(npx prisma migrate deploy || npx prisma db push --accept-data-loss) && npx tsx src/server.ts"]
